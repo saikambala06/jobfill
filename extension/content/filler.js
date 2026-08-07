@@ -48,6 +48,12 @@
   };
 
   function setNativeValue(el, value) {
+    // React caches the last value it saw on the node and ignores an `input` event
+    // whose value matches that cache. Clearing the tracker first guarantees the
+    // change is seen as a change.
+    const tracker = el._valueTracker;
+    if (tracker?.setValue) { try { tracker.setValue(''); } catch { /* not React */ } }
+
     const setter = nativeSetters[el.tagName.toLowerCase()];
     if (setter) setter.call(el, value);
     else el.value = value;
@@ -64,9 +70,38 @@
       el.dispatchEvent(new KeyboardEvent('keydown', { ...opts, key: 'a' }));
       el.dispatchEvent(new KeyboardEvent('keypress', { ...opts, key: 'a' }));
     }
-    el.dispatchEvent(new Event('input', opts));
+    // A plain Event named "input" is not an InputEvent. Frameworks that read
+    // `inputType` treat the plain one as synthetic and ignore it.
+    try {
+      el.dispatchEvent(new InputEvent('input', { ...opts, inputType: 'insertText', data: String(el.value ?? '') }));
+    } catch {
+      el.dispatchEvent(new Event('input', opts));
+    }
     el.dispatchEvent(new Event('change', opts));
     if (keys) el.dispatchEvent(new KeyboardEvent('keyup', { ...opts, key: 'a' }));
+  }
+
+  /**
+   * Make the page believe the user has finished with this field.
+   *
+   * This is the step that was missing, and it is why Workday kept reporting
+   * "First Name is required and must have a value" under a box that plainly had a
+   * name in it. Workday commits what you typed to its own model when focus leaves,
+   * and the old code dispatched `new Event('blur')` — which does not bubble, so a
+   * handler listening on the form container never heard it — without ever moving
+   * focus. The value sat in the DOM and nowhere else.
+   */
+  function commitField(el) {
+    // FocusEvent is the right constructor but not guaranteed to exist in every
+    // context this script runs in; a bubbling Event of the same name is read
+    // identically by a listener.
+    const Focus = window.FocusEvent || window.Event || Event;
+    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+    // focusout is the bubbling counterpart of blur, and the one React's onBlur
+    // and Workday's own delegated handlers are actually listening for.
+    el.dispatchEvent(new Focus('focusout', { bubbles: true, cancelable: false }));
+    el.dispatchEvent(new Focus('blur', { bubbles: false, cancelable: false }));
+    try { el.blur(); } catch { /* detached */ }
   }
 
   function focusFirst(el) {
@@ -85,12 +120,25 @@
    * which is most of where the sluggishness came from.
    */
   async function fillText(el, value, { blur = true } = {}) {
+    const want = String(value);
     focusFirst(el);
-    setNativeValue(el, String(value));
-    JF.claim(el, String(value));
+    setNativeValue(el, want);
+    JF.claim(el, want);
     fireEvents(el, { keys: true });
-    if (blur) el.dispatchEvent(new Event('blur', { bubbles: true }));
-    return String(el.value) === String(value);
+    if (blur) commitField(el);
+
+    // Some frameworks re-render the control between the write and the commit and
+    // hand back an empty box. One retry against the live node fixes it; a second
+    // would just be thrashing.
+    if (String(el.value) !== want) {
+      await sleep(60);
+      focusFirst(el);
+      setNativeValue(el, want);
+      JF.claim(el, want);
+      fireEvents(el, { keys: true });
+      if (blur) commitField(el);
+    }
+    return String(el.value) === want;
   }
 
   /** contenteditable rich-text areas (Lever's cover-letter box, some Workday notes). */
@@ -421,6 +469,68 @@
   document.addEventListener('keydown', markUserEdited, true);
   document.addEventListener('paste', markUserEdited, true);
 
+  const ERROR_RE = /required|invalid|must have|cannot be|not valid|enter a/i;
+  const ERROR_SEL = [
+    '[data-automation-id="errorMessage"]',
+    '[data-automation-id*="rror"]',
+    '[role="alert"]',
+    '.error-message', '[class*="errorMessage"]', '[class*="ErrorMessage"]',
+  ].join(', ');
+
+  /**
+   * Did the page reject what we put in this field?
+   *
+   * Checked after the whole pass rather than per write, because a form validates
+   * on submit or on blur of a later field — the error for First Name appears long
+   * after First Name was filled.
+   */
+  JF.fieldError = function fieldError(el) {
+    if (!el) return null;
+    const invalid = el.getAttribute('aria-invalid') === 'true';
+
+    // Prefer the form's own wording — "The field First Name is required and must
+    // have a value" tells the user what to do; "the form rejected this" does not.
+    const described = el.getAttribute('aria-describedby');
+    if (described) {
+      for (const id of described.split(/\s+/)) {
+        const node = document.getElementById(id);
+        const text = node?.textContent?.trim();
+        if (text && (invalid || ERROR_RE.test(text))) return text.slice(0, 160);
+      }
+    }
+
+    // Otherwise look inside this field's own wrapper, never the whole form —
+    // an unrelated error elsewhere on the page is not this field's problem.
+    let box = el.closest('[data-automation-id^="formField"]') || el.parentElement;
+    for (let depth = 0; depth < 3 && box; depth++, box = box.parentElement) {
+      if (box.querySelectorAll('input, select, textarea').length > 2) break;
+      const err = box.querySelector(ERROR_SEL);
+      if (err && JF.isVisible(err) && err.textContent.trim()) {
+        return err.textContent.trim().slice(0, 160);
+      }
+    }
+
+    return invalid ? 'The form rejected this value' : null;
+  };
+
+  /** Write it again, harder, for a field the page says is still empty. */
+  JF.repairField = async function repairField(el, value) {
+    if (!el) return false;
+    focusFirst(el);
+    await sleep(40);
+    setNativeValue(el, '');
+    fireEvents(el);
+    await sleep(40);
+    setNativeValue(el, String(value));
+    JF.claim(el, String(value));
+    fireEvents(el, { keys: true });
+    await sleep(40);
+    commitField(el);
+    await sleep(120);
+    return !JF.fieldError(el) && String(el.value) === String(value);
+  };
+
+  JF.commitField = commitField;
   JF.sleep = sleep;
   JF.setNativeValue = setNativeValue;
   JF.fireEvents = fireEvents;

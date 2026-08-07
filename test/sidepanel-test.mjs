@@ -27,9 +27,16 @@ t('no default_popup to suppress the click', !manifest.action?.default_popup);
 t('the file it points at exists', fs.existsSync(`${EXT}/${manifest.side_panel.default_path}`));
 
 const sw = fs.readFileSync(`${EXT}/background/service-worker.js`, 'utf8');
-t('openPanelOnActionClick is set', /setPanelBehavior\(\s*\{\s*openPanelOnActionClick:\s*true/.test(sw));
-t('no action.onClicked listener (it would block the panel)',
-  !/chrome\.action\.onClicked\.addListener/.test(sw));
+// Chrome has no sidePanel.close(), so letting it handle the click gives
+// open-only behaviour. We take the click and toggle it ourselves.
+t('Chrome does not auto-open (we toggle)', /setPanelBehavior\(\s*\{\s*openPanelOnActionClick:\s*false/.test(sw));
+t('the icon click is handled here', /chrome\.action\.onClicked\.addListener/.test(sw));
+t('the worker tracks which panels are open', /openPanels/.test(sw));
+t('a second click asks the panel to close', /postMessage\(\{\s*type:\s*'CLOSE'/.test(sw));
+t('a first click opens it', /sidePanel\.open\(/.test(sw));
+t('the panel holds a port open while it lives', /connect\(\{\s*name:\s*'jobfill-sidepanel'/.test(js));
+t('and closes itself when told', /type === 'CLOSE'[\s\S]{0,40}window\.close\(\)/.test(js));
+t('closing ends the document, so reopening starts fresh', /window\.close\(\)/.test(js));
 
 /* ------------------------------------------------------- every id exists -- */
 console.log('\n── every id the script reaches for is in the markup ─────');
@@ -62,8 +69,12 @@ t('the confirm dialog asks before counting',
 t('it starts hidden', doc.getElementById('scrim')?.hasAttribute('hidden'));
 t('there is a loading state', Boolean(doc.querySelector('#dlg-busy .loader')));
 t('confirming records the application', js.includes('COMPLETE_APPLICATION'));
-t('and then looks for the next step', js.includes('waitForNextStep'));
-t('which fills it', /waitForNextStep[\s\S]{0,600}\$\('fill'\)\.click\(\)/.test(js));
+t('the dialog closes rather than blocking the form', /dialog\.close\(\)[\s\S]{0,120}armedForNextStep = true/.test(js));
+t('and arms the next step instead of polling', js.includes('armedForNextStep'));
+t('"Not yet" only closes the dialog', /\$\('dlg-cancel'\)\.onclick = \(\) => dialog\.close\(\);/.test(js));
+t('and clears nothing', !/dlg-cancel[\s\S]{0,80}clearResults/.test(js));
+t('a new step fills itself once armed', /armedForNextStep && p\.unfilled > 0[\s\S]{0,120}fillNextStep\(\)/.test(js));
+t('the armed state is visible on the button', css.includes('#fill.armed'));
 
 t('the account button opens a menu', doc.getElementById('account-btn')?.getAttribute('aria-haspopup') === 'menu');
 t('sign out lives inside that menu', Boolean(doc.querySelector('#account-menu #logout')));

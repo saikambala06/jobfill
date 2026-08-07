@@ -18,34 +18,29 @@ let mode = 'login';
 let formTab = null;
 let rows = [];
 
-// True only while the "recording this application → next step" sequence owns
-// the refresh. The tab-navigation listener below backs off during that window
-// so the two refreshes don't stack and make the whole panel look like it is
-// reloading — one controlled rescan happens, right after the animation ends.
-let awaitingNextStep = false;
-
-/**
- * The toolbar icon already opens/closes the panel natively (Chrome destroys and
- * rebuilds this document each time — see background/service-worker.js). This
- * connection just gives the worker a signal for when that teardown happens, so
- * a click that reopens the panel is guaranteed to start from a clean slate
- * rather than anything cached from the application that was open before.
- */
-chrome.runtime.connect({ name: 'jobfill-panel' });
-
 /* ---------------------------------------------------------------- boot -- */
 async function currentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab && /^https?:/.test(tab.url || '') ? tab : null;
 }
 
-(async function boot() {
-  // Belt-and-suspenders reset: even if a future Chrome build ever kept this
-  // document alive across a close, the panel should still look brand-new the
-  // moment it reopens — no leftover trace rows or notes from the last job.
-  clearResults();
-  $('fill-note').hidden = true;
+/**
+ * Stay connected to the service worker for as long as this panel is on screen.
+ *
+ * The port is how the toolbar icon knows the panel is already open, so the next
+ * click can close it instead of doing nothing. Closing is this document ending
+ * itself — which is also why every open is a fresh start rather than a resumption.
+ */
+function connectToggle() {
+  const port = chrome.runtime.connect({ name: 'jobfill-sidepanel' });
+  chrome.windows.getCurrent().then((w) => port.postMessage({ type: 'REGISTER', windowId: w.id })).catch(() => {});
+  port.onMessage.addListener((msg) => { if (msg?.type === 'CLOSE') window.close(); });
+  // If the worker is torn down mid-session, reconnect so the toggle keeps working.
+  port.onDisconnect.addListener(() => setTimeout(connectToggle, 400));
+}
+connectToggle();
 
+(async function boot() {
   formTab = await currentTab();
 
   const { apiBase } = await chrome.storage.local.get('apiBase');
@@ -62,11 +57,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
   const tab = await currentTab();
   if (tab?.id !== tabId) return;
   formTab = tab;
-  // While the done-dialog is already polling for the next step, let that one
-  // controlled rescan own the refresh instead of racing it here — otherwise
-  // the detect box clears and repopulates twice in a row, which reads as the
-  // whole panel reloading rather than one clean update after the animation.
-  if (awaitingNextStep) return;
   clearResults();
   refreshPage();
 });
@@ -170,20 +160,21 @@ async function scanPage() {
   const box = $('detect');
   try {
     if (!formTab) throw new Error('no page');
-    const res = await chrome.tabs.sendMessage(formTab.id, { type: 'SCAN_ONLY' });
+    const res = await chrome.tabs.sendMessage(formTab.id, { type: 'SCAN_ONLY', payload: { force: true } });
     if (res?.ok && res.data.count > 0) {
       box.className = 'detect found';
       $('detect-ats').textContent = res.data.ats;
       $('detect-count').textContent = `${res.data.count} detected`;
       $('detect-role').textContent = res.data.page?.role || res.data.page?.company || '—';
       $('fill').disabled = false;
-      return;
+      return res.data;
     }
     box.className = 'detect none';
     $('detect-ats').textContent = res?.data?.ats || 'No form on this page';
     $('detect-count').textContent = '0 detected';
     $('detect-role').textContent = '—';
     $('fill').disabled = true;
+    return null;
   } catch {
     // No content script here — a chrome:// page, or a tab opened before install.
     box.className = 'detect none';
@@ -191,6 +182,7 @@ async function scanPage() {
     $('detect-count').textContent = '—';
     $('detect-role').textContent = 'Reload the page and try again';
     $('fill').disabled = true;
+    return null;
   }
 }
 
@@ -294,21 +286,15 @@ $('auto-steps').onchange = async (e) => {
   await chrome.storage.local.set({ autoFillNewSteps: e.target.checked });
 };
 
-/* ------------------------------------------------------ refresh / done ------ */
+/* ----------------------------------------------------------- done ------ */
 const dialog = {
   open() { $('scrim').hidden = false; $('dlg-ask').hidden = false; $('dlg-busy').hidden = true; $('dlg-ok').focus(); },
-  busy(text) {
-    $('dlg-ask').hidden = true; $('dlg-busy').hidden = false; $('dlg-busy-text').textContent = text;
-    $('refresh-app').classList.add('spinning');
-  },
-  close() {
-    $('scrim').hidden = true;
-    $('refresh-app').classList.remove('spinning');
-  },
+  busy(text) { $('dlg-ask').hidden = true; $('dlg-busy').hidden = false; $('dlg-busy-text').textContent = text; },
+  close() { $('scrim').hidden = true; },
 };
 
-$('refresh-app').onclick = () => dialog.open();
-$('dlg-cancel').onclick = () => dialog.close(); // "Not yet" — pop the dialog only, nothing else changes.
+$('done').onclick = () => dialog.open();
+$('dlg-cancel').onclick = () => dialog.close();
 $('scrim').onclick = (e) => { if (e.target === $('scrim')) dialog.close(); };
 
 /**
@@ -319,49 +305,51 @@ $('scrim').onclick = (e) => { if (e.target === $('scrim')) dialog.close(); };
  * step in the same gesture is the difference between a tool you drive and a tool
  * you supervise.
  */
+/**
+ * Armed by Done, disarmed by the next fill.
+ *
+ * The old version sat in the dialog polling for six seconds and then gave up,
+ * which was always going to be wrong: the next step does not appear until the
+ * *user* presses "Save and Continue", and they cannot do that while a modal is
+ * covering the panel. Pressing Done is consent for the next step to fill itself
+ * whenever it turns up, so the dialog closes straight away and the step watcher
+ * does the rest.
+ */
+let armedForNextStep = false;
+
 $('dlg-ok').onclick = async () => {
-  awaitingNextStep = true;
   dialog.busy('Recording this application…');
 
   const res = await send('COMPLETE_APPLICATION', { url: formTab?.url, title: formTab?.title });
   if (!res?.ok) {
-    awaitingNextStep = false;
     dialog.close();
     showNote(res?.error || 'Could not record the application.', true);
     return;
   }
 
   await loadStats();
-  dialog.busy('Looking for the next step…');
-
-  // Give the page a moment to navigate before deciding there is nothing left.
-  // This is the single rescan that loads fresh field data once the animation
-  // is done — the tab listener above stays quiet the whole time so nothing
-  // else refreshes underneath it.
-  const next = await waitForNextStep();
-  awaitingNextStep = false;
+  await new Promise((r) => setTimeout(r, 450));   // let the tick land before it vanishes
   dialog.close();
 
-  if (!next) {
-    showNote(`Application recorded. You have completed ${res.data.completed}.`);
-    return;
-  }
-  showNote(`Application recorded — filling the next step now.`);
-  $('fill').click();
+  armedForNextStep = true;
+  setArmedUI(true);
+  showNote(`Recorded — ${res.data.completed} completed. Continue in the form and the next step will fill itself.`);
+
+  // If the form has already moved on, do not wait for a change that has happened.
+  const now = await scanPage();
+  if (now?.unfilled > 0) fillNextStep();
 };
 
-/** Poll for a step with unfilled questions on it, for a few seconds. */
-async function waitForNextStep(timeoutMs = 6000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 700));
-    try {
-      const res = await chrome.tabs.sendMessage(formTab.id, { type: 'SCAN_ONLY', payload: { force: true } });
-      if (res?.ok && res.data.count > 0 && res.data.unfilled > 0) { await scanPage(); return true; }
-    } catch { /* mid-navigation; try again */ }
-  }
-  await scanPage();
-  return false;
+function setArmedUI(on) {
+  $('fill').querySelector('.btn-label').textContent = on ? 'Waiting for the next step' : 'Fill this application';
+  $('fill').classList.toggle('armed', on);
+}
+
+function fillNextStep() {
+  if (!armedForNextStep) return;
+  armedForNextStep = false;
+  setArmedUI(false);
+  $('fill').click();
 }
 
 function showNote(text, warn = false) {
@@ -444,6 +432,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (p.phase === 'done') {
     resetFillButton();
+    if (p.repaired) $('m-review').textContent = String(Number($('m-review').textContent || 0));
     $('trace-bar').style.width = '100%';
     $('m-detected').textContent = p.detected ?? '—';
     if (p.warning) {
@@ -475,7 +464,13 @@ chrome.runtime.onMessage.addListener((msg) => {
     $('detect-count').textContent = `${p.detected} detected`;
     $('detect-role').textContent = p.role || '—';
     $('fill').disabled = !p.detected;
-    $('fill-note').hidden = true;
+    if (!armedForNextStep) $('fill-note').hidden = true;
+
+    // This is the step Done was waiting for.
+    if (armedForNextStep && p.unfilled > 0) {
+      showNote('New step — filling it now.');
+      fillNextStep();
+    }
     return;
   }
 

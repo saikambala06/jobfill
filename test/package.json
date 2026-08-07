@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node test.mjs && node dom-test.mjs && node pipeline-test.mjs && node workday-test.mjs && node memory-test.mjs && node guard-test.mjs && node panel-test.mjs && node sidepanel-test.mjs"
+    "test": "node test.mjs && node dom-test.mjs && node pipeline-test.mjs && node workday-test.mjs && node memory-test.mjs && node guard-test.mjs && node panel-test.mjs && node sidepanel-test.mjs && node validation-test.mjs"
   },
   "devDependencies": { "jsdom": "^24.1.0" }
 }

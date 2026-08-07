@@ -87,24 +87,6 @@ const HANDLERS = {
   },
 };
 
-/**
- * Side-panel lifecycle.
- *
- * `openPanelOnActionClick` (set below) is what makes one toolbar icon do all
- * three things the user expects: click to open, click again to close it
- * completely (Chrome tears the panel's document down, it isn't just hidden),
- * click a third time to open it fresh. This connection only exists so the
- * worker can log/react to that teardown if it ever needs to — the panel
- * itself already resets its own view on every boot (see sidepanel.js).
- */
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'jobfill-panel') return;
-  port.onDisconnect.addListener(() => {
-    // Panel fully closed. Nothing to persist here on purpose — the next open
-    // is meant to start newly rather than resume the last application.
-  });
-});
-
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   if (msg.type === 'PAGE_READY') {
     // Badge the tab so the user knows a fillable form was recognised.
@@ -157,15 +139,72 @@ async function triggerFill(tab, opts = {}) {
  * once `openPanelOnActionClick` is set, which is why there is no onClicked handler
  * here: registering one would suppress that behaviour.
  */
+/**
+ * Chrome can open a side panel for you on an icon click, but it cannot close one —
+ * there is no `sidePanel.close()`. Letting Chrome handle the click therefore gives
+ * open-only behaviour, with the second click doing nothing at all.
+ *
+ * So we take the click ourselves. The panel announces itself over a long-lived
+ * port while it is alive, which tells us whether the next click means open or
+ * close; closing is the panel calling `window.close()` on itself, which is the one
+ * thing that does work. Because that tears the document down, every open starts
+ * from a clean panel rather than resuming the last application.
+ */
+const openPanels = new Map(); // windowId -> Port
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'jobfill-sidepanel') return;
+  const windowId = port.sender?.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+  port.postMessage({ type: 'HELLO' });
+
+  // The panel tells us which window it belongs to; the sender does not carry it.
+  port.onMessage.addListener((msg) => {
+    if (msg?.type === 'REGISTER' && typeof msg.windowId === 'number') {
+      openPanels.set(msg.windowId, port);
+      port._windowId = msg.windowId;
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    const id = port._windowId ?? windowId;
+    if (openPanels.get(id) === port) openPanels.delete(id);
+  });
+});
+
 async function enableSidePanel() {
   try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    // We drive the click, so Chrome must not.
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
   } catch (err) {
     console.warn('[jobfill] side panel unavailable', err?.message);
   }
 }
 enableSidePanel();
 chrome.runtime.onStartup?.addListener(enableSidePanel);
+
+chrome.action.onClicked.addListener(async (tab) => {
+  const windowId = tab?.windowId;
+  const open = openPanels.get(windowId);
+
+  if (open) {
+    try { open.postMessage({ type: 'CLOSE' }); } catch { openPanels.delete(windowId); }
+    return;
+  }
+
+  const { token } = await chrome.storage.local.get('token');
+  if (!token) {
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html?welcome=1') });
+    return;
+  }
+
+  try {
+    await chrome.sidePanel.setOptions({ path: 'sidepanel/sidepanel.html', enabled: true });
+    // open() must be called synchronously enough to still count as a user gesture.
+    await chrome.sidePanel.open(tab?.id ? { tabId: tab.id } : { windowId });
+  } catch (err) {
+    console.warn('[jobfill] could not open the side panel', err?.message);
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') });
+  }
+});
 
 
 chrome.commands?.onCommand.addListener(async (command) => {

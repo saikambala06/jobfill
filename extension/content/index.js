@@ -77,6 +77,7 @@
       tellPanel({
         phase: 'page',
         detected: now.fields.length,
+        unfilled: now.fields.filter((f) => !f.prefilled).length,
         ats: now.adapter.name,
         role: now.page.role || now.page.company || '',
         url: location.href,
@@ -163,6 +164,9 @@
     }
 
     const results = [];
+    // Text and date fields are the ones a form validates against its own model;
+    // the sweep at the end re-checks these and nothing else.
+    const written = [];
     for (let i = 0; i < fills.length; i++) {
       const fill = fills[i];
       const field = byUid.get(fill.uid);
@@ -173,6 +177,9 @@
         quirks: detection.adapter.quirks,
       });
       results.push(result);
+      if (result.ok && ['text', 'textarea', 'date', 'number'].includes(field.control)) {
+        written.push({ fill, field });
+      }
 
       const row = {
         uid: fill.uid,
@@ -199,14 +206,48 @@
       if (needsBeat) await JF.sleep(detection.adapter.quirks?.slowRender ? 90 : 35);
     }
 
+    // ---- validation sweep -------------------------------------------------
+    // The form has now seen every value and had a chance to complain. Anything it
+    // rejected gets one more attempt with focus moved properly, which is what
+    // Workday needs before it will accept a value into its own model.
+    const repaired = [];
+    const stillWrong = [];
+    if (written.length) await JF.sleep(detection.adapter.quirks?.slowRender ? 450 : 200);
+    for (const { fill, field } of written) {
+      const el = document.querySelector(field.selector);
+      const err = el && JF.fieldError(el);
+      if (!err) continue;
+
+      const ok = await JF.repairField(el, fill.value);
+      const entry = { label: field.label || fill.label, error: err };
+      (ok ? repaired : stillWrong).push(entry);
+      tellPanel({
+        phase: 'row',
+        row: {
+          uid: `${fill.uid}:repair`,
+          ok,
+          label: field.label || fill.label,
+          value: ok ? String(fill.value) : err,
+          via: 'repair',
+          needsReview: !ok,
+        },
+      });
+    }
+    if (repaired.length) console.info(`[jobfill] repaired ${repaired.length} field(s) the form had rejected`);
+
     const filled = results.filter((r) => r.ok).length;
     tellPanel({
       phase: 'done',
       detected: detection.fields.length,
       filled,
-      warning: warning || (stats.leftBlankOnPurpose
-        ? `${stats.leftBlankOnPurpose} field${stats.leftBlankOnPurpose === 1 ? '' : 's'} left blank because you saved them that way.`
-        : null),
+      repaired: repaired.length,
+      warning: stillWrong.length
+        ? `${stillWrong.length} field${stillWrong.length === 1 ? '' : 's'} the form is still rejecting — ${stillWrong[0].label}. Retype ${stillWrong.length === 1 ? 'it' : 'them'} by hand.`
+        : warning || (repaired.length
+          ? `Fixed ${repaired.length} field${repaired.length === 1 ? '' : 's'} the form had rejected.`
+          : (stats.leftBlankOnPurpose
+            ? `${stats.leftBlankOnPurpose} field${stats.leftBlankOnPurpose === 1 ? '' : 's'} left blank because you saved them that way.`
+            : null)),
     });
     ui.update({
       title: `${filled} of ${detection.fields.length} filled`,
