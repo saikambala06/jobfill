@@ -71,6 +71,11 @@ export default function Profile() {
             <Field label="Preferred name" hint="Used when a form asks what you go by."><Input value={p.identity?.preferredName} onChange={set('identity', 'preferredName')} /></Field>
             <Field label="Email"><Input type="email" value={p.identity?.email} onChange={set('identity', 'email')} /></Field>
             <Field label="Phone"><Input type="tel" value={p.identity?.phone} onChange={set('identity', 'phone')} placeholder="+91 98765 43210" /></Field>
+            <Field label="Country phone code" hint="Forms with a separate dial-code picker use this."><Input value={p.identity?.phoneCountryCode} onChange={set('identity', 'phoneCountryCode')} placeholder="+91" /></Field>
+            <Field label="Phone type" hint="Left blank, a form that asks will stay blank rather than guess.">
+              <Select value={p.identity?.phoneDeviceType} onChange={set('identity', 'phoneDeviceType')}
+                placeholder="Not set" options={['Mobile', 'Home', 'Work', 'Landline']} />
+            </Field>
             <Field label="Pronouns"><Input value={p.identity?.pronouns} onChange={set('identity', 'pronouns')} placeholder="she/her" /></Field>
           </>)}
 

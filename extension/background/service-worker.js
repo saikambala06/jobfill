@@ -103,20 +103,49 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
 });
 
 /* ---------------------------------------------------------- entrypoints -- */
-async function triggerFill(tab, opts = {}) {
-  if (!tab?.id || !/^https?:/.test(tab.url || '')) return;
+const CONTENT_FILES = [
+  'content/adapters.js', 'content/detector.js', 'content/filler.js',
+  'content/overlay.js', 'content/index.js',
+];
+
+/** Talk to the page, injecting the content script first if it is not there yet. */
+async function tell(tab, message) {
+  if (!tab?.id || !/^https?:/.test(tab.url || '')) return null;
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'RUN_AUTOFILL', payload: opts });
+    return await chrome.tabs.sendMessage(tab.id, message);
   } catch {
     // The content script may not be injected on a tab that predates install.
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      files: ['content/adapters.js', 'content/detector.js', 'content/filler.js', 'content/overlay.js', 'content/index.js'],
-    });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id, allFrames: true }, files: CONTENT_FILES });
     await chrome.scripting.insertCSS({ target: { tabId: tab.id, allFrames: true }, files: ['content/content.css'] });
-    await chrome.tabs.sendMessage(tab.id, { type: 'RUN_AUTOFILL', payload: opts });
+    return chrome.tabs.sendMessage(tab.id, message).catch(() => null);
   }
 }
+
+async function triggerFill(tab, opts = {}) {
+  return tell(tab, { type: 'RUN_AUTOFILL', payload: opts });
+}
+
+/**
+ * The toolbar icon toggles the in-page panel.
+ *
+ * With no `default_popup` in the manifest this handler fires on every click, so
+ * the panel opens on one click and closes on the next — and, because it lives in
+ * the page rather than in a browser popup, clicking anywhere on the form leaves it
+ * exactly where it was.
+ */
+chrome.action.onClicked.addListener(async (tab) => {
+  const { token } = await chrome.storage.local.get('token');
+  if (!token) {
+    // Nothing useful to show until there is an account behind it.
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') });
+    return;
+  }
+  if (!/^https?:/.test(tab?.url || '')) {
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') });
+    return;
+  }
+  await tell(tab, { type: 'TOGGLE_PANEL', payload: {} });
+});
 
 chrome.commands?.onCommand.addListener(async (command) => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

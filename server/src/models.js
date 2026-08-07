@@ -43,7 +43,11 @@ const ProfileSchema = new Schema({
   identity: {
     firstName: String, lastName: String, middleName: String, fullName: String,
     preferredName: String, pronouns: String, email: String,
-    phone: String, phoneCountryCode: String, dateOfBirth: String,
+    phone: String, phoneCountryCode: String,
+    // Workday and Oracle both ask for this next to the number, and a wrong guess
+    // ("Landline" against a mobile) is visible to the recruiter. Stored, not inferred.
+    phoneDeviceType: { type: String, enum: ['Mobile', 'Home', 'Work', 'Landline', ''], default: '' },
+    dateOfBirth: String,
   },
   location: {
     addressLine1: String, addressLine2: String, city: String,
@@ -110,7 +114,14 @@ const AnswerSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   question: { type: String, required: true },
   normalized: { type: String, required: true, index: true },
-  answer: { type: String, required: true },
+  // "employment:1", "education:0" — which repeating block the question was asked
+  // in. Part of the identity of the answer: without it the second job's "Company"
+  // overwrites the first one's, and whichever was saved last wins both.
+  scope: { type: String, default: '' },
+  // An empty answer the user deliberately left empty. Stored so the next fill
+  // leaves it empty too, instead of the planner filling in the gap for them.
+  skipped: { type: Boolean, default: false },
+  answer: { type: String, default: '' },
   canonicalKey: String,
   control: String,
   chosenOptions: [String],
@@ -120,7 +131,9 @@ const AnswerSchema = new Schema({
   pinned: { type: Boolean, default: false },
   sites: [String],
 }, { timestamps: true });
-AnswerSchema.index({ userId: 1, normalized: 1 }, { unique: true });
+// NOTE: replaces the old { userId, normalized } unique index. On an existing
+// database drop that one first: db.answers.dropIndex('userId_1_normalized_1').
+AnswerSchema.index({ userId: 1, normalized: 1, scope: 1 }, { unique: true });
 
 /* ------------------------------------------------------- application ---- */
 const ApplicationSchema = new Schema({

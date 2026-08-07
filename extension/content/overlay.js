@@ -185,7 +185,7 @@
       </div>
       <div class="foot">
         <button class="btn ghost" data-act="rescan">Scan again</button>
-        <button class="btn primary" data-act="save">Save answers</button>
+        <button class="btn primary" data-act="${state.rows.length ? 'save' : 'fill'}">${state.rows.length ? 'Save answers' : 'Fill this application'}</button>
       </div>`;
 
     panel.querySelector('.close').onclick = () => JF.overlay.hide();
@@ -214,15 +214,36 @@
       </div>`;
   }
 
+  /**
+   * The panel lives in the page, not in a browser popup, and that is deliberate.
+   * A `default_popup` is torn down by Chrome the instant focus moves anywhere else,
+   * so it cannot survive the user clicking into the very form it is describing.
+   * This one only ever closes when someone asks it to — the × or the toolbar icon.
+   */
+  let open = false;
+
   JF.overlay = {
-    show(patch = {}) { state = { ...state, ...patch }; render(); },
-    update(patch = {}) { Object.assign(state, patch); render(); },
-    addRow(row) { state.rows = [...state.rows.filter((r) => r.uid !== row.uid), row]; render(); },
+    show(patch = {}) { state = { ...state, ...patch }; open = true; render(); },
+    open(patch = {}) { state = { ...state, ...patch }; open = true; render(); },
+    update(patch = {}) {
+      Object.assign(state, patch);
+      if (open) render();
+    },
+    addRow(row) {
+      state.rows = [...state.rows.filter((r) => r.uid !== row.uid), row];
+      if (open) render();
+    },
     progress(done, total) {
       const bar = shadow?.querySelector('.trace i');
       if (bar) bar.style.width = `${Math.round((done / Math.max(1, total)) * 100)}%`;
     },
-    hide() { hostEl?.remove(); hostEl = null; },
+    hide() { open = false; hostEl?.remove(); hostEl = null; },
+    toggle(patch = {}) {
+      if (open) this.hide();
+      else this.open(patch);
+      return open;
+    },
+    isOpen() { return open && Boolean(hostEl?.isConnected); },
     get state() { return state; },
     onAction: null,
   };

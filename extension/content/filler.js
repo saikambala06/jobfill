@@ -12,6 +12,34 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  /**
+   * What *we* put in each control, so a later pass can tell our own writing apart
+   * from the user's. Without this the only signal is "the box is non-empty", which
+   * cannot distinguish a value we wrote a second ago from one the user is halfway
+   * through typing — and that ambiguity is what let a re-scan overwrite live input.
+   */
+  const written = new WeakMap();
+
+  /**
+   * True when the control belongs to the user right now and must not be touched.
+   *
+   * Focus deliberately is *not* one of the signals. Filling a form focuses each
+   * field in turn, so treating "is focused" as "is theirs" made the extension
+   * refuse to correct a field it had itself just written a moment earlier. What
+   * actually marks a field as the user's is a trusted keystroke, or content that
+   * we cannot account for. Focus alone still blocks *automatic* re-runs — that
+   * check lives in the orchestrator, where it belongs.
+   */
+  JF.isUserOccupied = function isUserOccupied(el) {
+    if (!el) return false;
+    if (el.dataset?.jfUserEdited === '1') return true;          // they typed or pasted here
+    const current = el.isContentEditable ? el.textContent : el.value;
+    if (!String(current ?? '').trim()) return false;            // empty is fair game
+    return written.get(el) !== String(current);                 // non-empty and not ours
+  };
+
+  JF.claim = (el, value) => { if (el) written.set(el, String(value)); };
+
   /* --------------------------------------------------------- native set -- */
   const nativeSetters = {
     input: Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set,
@@ -49,15 +77,20 @@
   }
 
   /* -------------------------------------------------------------- text --- */
-  async function fillText(el, value) {
+  /**
+   * One write, not a clear-then-write. The old two-phase version fired an `input`
+   * event carrying an empty string first, which on re-rendering forms (Workday,
+   * SuccessFactors) kicked off a validation round-trip per field and occasionally
+   * landed *after* the real value, blanking it. It also doubled the event traffic,
+   * which is most of where the sluggishness came from.
+   */
+  async function fillText(el, value, { blur = true } = {}) {
     focusFirst(el);
-    setNativeValue(el, '');
-    fireEvents(el);
-    await sleep(10);
     setNativeValue(el, String(value));
+    JF.claim(el, String(value));
     fireEvents(el, { keys: true });
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
-    return true;
+    if (blur) el.dispatchEvent(new Event('blur', { bubbles: true }));
+    return String(el.value) === String(value);
   }
 
   /** contenteditable rich-text areas (Lever's cover-letter box, some Workday notes). */
@@ -74,11 +107,32 @@
   }
 
   /* ------------------------------------------------------------ select --- */
+  /**
+   * Substring matching is only safe on a short list. On a 200-entry country or
+   * dial-code dropdown "contains" matches dozens of options and the first one in
+   * document order wins — which is how a US phone number came out as Albania.
+   * Long lists therefore demand an exact or whole-word match, and failing that we
+   * leave the field alone rather than commit a guess.
+   */
   async function fillSelect(el, value) {
     const target = JF.normalize(String(value));
-    let chosen = [...el.options].find((o) => o.value === value)
-      || [...el.options].find((o) => JF.normalize(o.textContent) === target)
-      || [...el.options].find((o) => JF.normalize(o.textContent).includes(target) || target.includes(JF.normalize(o.textContent)));
+    if (!target) return false;
+    const opts = [...el.options];
+    const loose = opts.length <= 25;
+
+    let chosen = opts.find((o) => o.value === value)
+      || opts.find((o) => JF.normalize(o.textContent) === target)
+      || opts.find((o) => {
+        const t = JF.normalize(o.textContent);
+        return t.startsWith(`${target} `) || t.endsWith(` ${target}`) || t.split(' ').includes(target);
+      });
+
+    if (!chosen && loose) {
+      chosen = opts.find((o) => {
+        const t = JF.normalize(o.textContent);
+        return t.includes(target) || target.includes(t);
+      });
+    }
 
     if (!chosen) return false;
     focusFirst(el);
@@ -106,7 +160,14 @@
       const el = root.querySelector(opt.selector);
       if (!el) continue;
       const label = JF.normalize(opt.label || opt.value);
-      if (label === target || el.value === value || label.includes(target) || target.includes(label)) {
+      // Substring matching is wrong here and dangerously so on eligibility
+      // questions: "no" is a substring of "No, I do not require sponsorship" but
+      // also of "Not applicable", and "yes" matches both "Yes" and "Yes, but…".
+      // Exact first, then whole-word, and nothing else.
+      const words = label.split(' ');
+      const exact = label === target || el.value === value;
+      const wordHit = words[0] === target || words.includes(target);
+      if (exact || wordHit) {
         // Clicking the label rather than the input keeps custom-styled radios in sync.
         const clickable = el.closest('label') || document.querySelector(`label[for="${CSS.escape(el.id)}"]`) || el;
         focusFirst(el);
@@ -135,6 +196,8 @@
    */
   async function fillCombobox(el, value, quirks = {}) {
     const target = JF.normalize(String(value));
+    if (!target) return false;
+
     focusFirst(el);
     el.click();
     await sleep(quirks.slowRender || 180);
@@ -147,43 +210,80 @@
       await sleep(quirks.slowRender || 320);
     }
 
-    const options = await waitForOptions(quirks.slowRender || 400);
+    const options = await waitForOptions(el, quirks.slowRender || 400);
     if (!options.length) {
-      // Some comboboxes are really text inputs with a suggestion layer; the typed
-      // value alone is a valid outcome there.
-      return typeable && Boolean(el.value);
+      if (typeable && el.value) { JF.claim(el, el.value); return true; }
+      return false;
     }
 
+    // Scored the same way as a <select>: exact, then whole-word, then — only when
+    // the list is short enough for it to mean anything — substring.
+    const loose = options.length <= 25;
     let best = null;
     for (const opt of options) {
       const text = JF.normalize(opt.innerText || opt.textContent || '');
       if (!text) continue;
       let score = 0;
       if (text === target) score = 1;
-      else if (text.startsWith(target)) score = 0.9;
-      else if (text.includes(target) || target.includes(text)) score = 0.75;
-      if (score > (best?.score ?? 0)) best = { el: opt, score };
+      else if (text.startsWith(`${target} `) || text.endsWith(` ${target}`)) score = 0.93;
+      else if (text.split(' ').includes(target)) score = 0.88;
+      else if (loose && (text.includes(target) || target.includes(text))) score = 0.78;
+      if (score > (best?.score ?? 0)) best = { el: opt, score, text };
     }
 
-    if (best && best.score >= 0.7) {
+    if (best && best.score >= 0.85) {
       best.el.scrollIntoView({ block: 'nearest' });
       best.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       best.el.click();
       await sleep(120);
       el.dispatchEvent(new Event('blur', { bubbles: true }));
+
+      // Verify rather than assume. A listbox that ignored the click leaves the
+      // widget showing whatever was highlighted — usually the first row, which is
+      // how an alphabetical dial-code list commits "Albania" to every applicant.
+      const settled = JF.normalize(el.value || el.textContent || comboboxDisplay(el));
+      if (settled && !settled.includes(best.text) && !best.text.includes(settled)) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+        return false;
+      }
+      JF.claim(el, el.value ?? '');
       return true;
     }
 
-    // Nothing matched — close the menu so we don't leave the page in a weird state.
+    // Nothing matched confidently. Clear anything we typed so the page is not left
+    // holding a half-filtered string, and leave the field blank — an empty field
+    // the user notices beats a wrong one they do not.
+    if (typeable) { setNativeValue(el, ''); fireEvents(el); }
     el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
     return false;
   }
 
-  async function waitForOptions(timeout) {
-    const sel = '[role="option"], [role="listbox"] li, .select2-results__option, [class*="option"][id], li[data-value]';
+  /** What a div-soup combobox is currently showing, for the verify step. */
+  function comboboxDisplay(el) {
+    const owned = el.getAttribute('aria-activedescendant');
+    if (owned) return document.getElementById(owned)?.textContent || '';
+    return el.closest('[role="combobox"]')?.textContent || '';
+  }
+
+  /**
+   * Only ever look inside the listbox this combobox owns.
+   *
+   * Searching the whole document picked up options belonging to other widgets —
+   * a menu left open elsewhere, or a hidden template list — and scored them as if
+   * they were candidates for this field.
+   */
+  async function waitForOptions(el, timeout) {
+    const SEL = '[role="option"], [role="listbox"] li, .select2-results__option, [class*="option"][id], li[data-value]';
     const deadline = Date.now() + timeout;
+
     while (Date.now() < deadline) {
-      const found = [...document.querySelectorAll(sel)].filter((o) => JF.isVisible(o));
+      const owns = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+      const box = (owns && document.getElementById(owns))
+        || document.getElementById(el.getAttribute('aria-activedescendant') || '')?.closest('[role="listbox"]')
+        || el.closest('[role="combobox"]')?.parentElement?.querySelector('[role="listbox"]');
+
+      const scope = box || document;
+      const found = [...scope.querySelectorAll(SEL)].filter((o) => JF.isVisible(o));
       if (found.length) return found;
       await sleep(60);
     }
@@ -242,6 +342,13 @@
     const el = field.control === 'radio' ? root.querySelector(field.options?.[0]?.selector) : root.querySelector(field.selector);
     if (!el && field.control !== 'radio') return { uid: fill.uid, ok: false, reason: 'Field is no longer on the page' };
 
+    // Re-check ownership at the moment of writing, not at detection time. A plan
+    // takes a second or two to come back and the user may well have started typing
+    // in the meantime; the detection-time `prefilled` flag is stale by then.
+    if (el && field.control !== 'radio' && field.control !== 'checkbox' && JF.isUserOccupied(el)) {
+      return { uid: fill.uid, ok: false, reason: 'You had already typed here', skipped: true, label: field.label };
+    }
+
     try {
       let ok = false;
       switch (field.control) {
@@ -296,6 +403,23 @@
       target.classList.remove('jf-filled', 'jf-review', 'jf-ai');
     }, { once: true });
   };
+
+  /**
+   * A keystroke is the one unambiguous signal that a value is the user's. Marking
+   * on `beforeinput`/`keydown` (which only a real key press produces — dispatched
+   * `input` events do not) means an automatic re-scan can never claim the field
+   * back, however many times the page re-renders around it.
+   */
+  function markUserEdited(ev) {
+    if (!ev.isTrusted) return;
+    const el = ev.target;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+      el.dataset.jfUserEdited = '1';
+      el.classList.remove('jf-filled', 'jf-review', 'jf-ai');
+    }
+  }
+  document.addEventListener('keydown', markUserEdited, true);
+  document.addEventListener('paste', markUserEdited, true);
 
   JF.sleep = sleep;
   JF.setNativeValue = setNativeValue;

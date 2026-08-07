@@ -98,20 +98,65 @@ export function findBestAnswer(question, stored, threshold = 0.82) {
   return best && best.score >= threshold ? best : null;
 }
 
-/** Fuzzy option picking — used for selects, radios and typeahead listboxes. */
-export function bestOption(target, options) {
+/**
+ * Fuzzy option picking — used for selects, radios and typeahead listboxes.
+ *
+ * The floor scales with the size of the list, and that is the whole point. On a
+ * five-option yes/no question a loose match is almost certainly right. On a
+ * 200-entry country or dial-code list the same looseness matches dozens of rows
+ * and the winner is decided by alphabetical order, which is how a US phone number
+ * came back as Albania. Long lists must clear a much higher bar, and returning
+ * null — leaving the field empty for the user to set — is the correct outcome when
+ * nothing does.
+ */
+export function bestOption(target, options, hint) {
   if (!target || !options?.length) return null;
   const t = normalizeQuestion(String(target));
+  if (!t) return null;
+  const h = hint ? normalizeQuestion(String(hint)) : '';
+
+  const short = options.length <= 25;
+  const floor = short ? 0.6 : 0.82;
+
   let best = null;
   for (const opt of options) {
     const label = normalizeQuestion(opt.label ?? opt.value ?? '');
     if (!label) continue;
+
     let score;
-    if (label === t) score = 1;
-    else if (label.startsWith(t) || t.startsWith(label)) score = 0.92;
-    else if (label.includes(t) || t.includes(label)) score = 0.85;
+    // "Structural" means the whole target lines up with the start of the option:
+    // "United States" against "United States of America". That is a real match and
+    // the length gap is expected, so it is barely penalised.
+    let structural = false;
+    if (label === t) { score = 1; structural = true; }
+    else if (wordPrefix(label, t) || wordPrefix(t, label)) { score = 0.93; structural = true; }
+    else if (hasWholeWord(label, t) || hasWholeWord(t, label)) score = 0.86;
+    else if (short && (label.includes(t) || t.includes(label))) score = 0.7;
     else score = cosine(trigrams(t), trigrams(label));
+
+    // A one-word target matching a six-word option is weak evidence even when the
+    // word really is in there — "(+1)" is genuinely present in a dozen countries —
+    // so loose agreement is discounted by the length gap.
+    if (score < 1) {
+      const ratio = Math.min(label.length, t.length) / Math.max(label.length, t.length);
+      score *= structural ? 0.92 + 0.08 * ratio : 0.75 + 0.25 * ratio;
+    }
+
+    // A dial code like "+1" is shared by the US, Canada and half the Caribbean, so
+    // the code alone cannot pick a row. The candidate's own country breaks the tie.
+    if (h && score < 1 && (label.includes(h) || h.includes(label))) score = Math.min(1, score + 0.3);
+
     if (!best || score > best.score) best = { option: opt, score };
   }
-  return best && best.score >= 0.55 ? best : null;
+  return best && best.score >= floor ? best : null;
+}
+
+/** "united states" is a word-prefix of "united states of america"; "in" is not of "india". */
+function wordPrefix(haystack, needle) {
+  return haystack === needle || haystack.startsWith(`${needle} `);
+}
+
+function hasWholeWord(haystack, needle) {
+  if (!needle.includes(' ')) return haystack.split(' ').includes(needle);
+  return haystack.includes(` ${needle} `) || haystack.startsWith(`${needle} `) || haystack.endsWith(` ${needle}`);
 }

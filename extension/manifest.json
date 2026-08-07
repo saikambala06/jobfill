@@ -11,8 +11,7 @@
   "background": { "service_worker": "background/service-worker.js", "type": "module" },
 
   "action": {
-    "default_popup": "popup/popup.html",
-    "default_title": "Fill this application",
+    "default_title": "Open JobFill on this page",
     "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
   },
 
@@ -47,6 +46,6 @@
   },
 
   "web_accessible_resources": [
-    { "resources": ["content/content.css"], "matches": ["https://*/*"] }
+    { "resources": ["content/content.css", "popup/popup.html"], "matches": ["https://*/*"] }
   ]
 }

@@ -7,9 +7,21 @@ let mode = 'login';
 let activeTab = null;
 
 /* ---------------------------------------------------------------- boot -- */
+/**
+ * This page is now opened as a tab rather than a browser popup, so "the active
+ * tab" is this page itself. The tab we actually care about is the most recently
+ * used http(s) one, which is the form the user was looking at.
+ */
+async function findFormTab() {
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (active && /^https?:/.test(active.url || '')) return active;
+
+  const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] });
+  return tabs.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
+}
+
 (async function boot() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  activeTab = tab;
+  activeTab = await findFormTab();
 
   const { token, apiBase } = await chrome.storage.local.get(['token', 'apiBase']);
   $('api-base').value = apiBase || '';
@@ -82,6 +94,7 @@ $('logout').onclick = async () => { await send('LOGOUT'); showAuth(); };
 async function scanPage() {
   const box = $('detect');
   try {
+    if (!activeTab) throw new Error('no page');
     const res = await chrome.tabs.sendMessage(activeTab.id, { type: 'SCAN_ONLY' });
     if (res?.ok && res.data.count > 0) {
       box.className = 'detect found';
@@ -165,12 +178,14 @@ $('fill').onclick = async () => {
   note.hidden = true;
 
   try {
+    if (!activeTab) throw new Error('no page');
     await chrome.tabs.sendMessage(activeTab.id, {
       type: 'RUN_AUTOFILL',
       payload: { resumeId: $('resume').value || undefined },
     });
-    // The overlay takes over from here, so the popup gets out of the way.
-    setTimeout(() => window.close(), 550);
+    // The in-page panel takes over from here, so bring that tab forward.
+    await chrome.tabs.update(activeTab.id, { active: true });
+    setTimeout(() => window.close(), 400);
   } catch {
     btn.classList.remove('busy');
     btn.querySelector('.btn-label').textContent = 'Fill this application';
@@ -181,7 +196,7 @@ $('fill').onclick = async () => {
 };
 
 $('save-answers').onclick = async () => {
-  await chrome.tabs.sendMessage(activeTab.id, { type: 'SAVE_ANSWERS_NOW' }).catch(() => {});
+  if (activeTab) await chrome.tabs.sendMessage(activeTab.id, { type: 'SAVE_ANSWERS_NOW' }).catch(() => {});
   $('save-answers').textContent = 'Answers saved';
   setTimeout(() => { $('save-answers').textContent = 'Save answers'; }, 1800);
 };

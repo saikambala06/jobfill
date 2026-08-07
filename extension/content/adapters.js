@@ -39,12 +39,41 @@
       name: 'Workday',
       match: () => hostIs('myworkdayjobs.com', 'workday.com', 'wd1.', 'wd3.', 'wd5.') || has('[data-automation-id="jobApplication"], [data-automation-id]'),
       root: () => document.querySelector('[data-automation-id="jobApplication"], [data-automation-id="applyFlowPage"]') || document.body,
-      // Workday's accessible name is on the automation id far more reliably than on any label element.
+      /**
+       * Each control lives in its own `formField-*` container and the label inside
+       * THAT container is the one that belongs to it.
+       *
+       * The previous implementation reached up to the enclosing `div[role="group"]`
+       * and took its first label, which meant every control inside a "Work
+       * Experience 2" block — company, location, dates, description — was told it
+       * was called "Job Title". That single line is what produced role descriptions
+       * in Location boxes and phone numbers in Phone Extension.
+       */
       labelFor: (el) => {
-        const wrap = el.closest('[data-automation-id]');
-        const auto = wrap?.getAttribute('data-automation-id') || el.getAttribute('data-automation-id');
-        const legend = el.closest('div[role="group"]')?.querySelector('legend, label')?.textContent;
-        return legend?.trim() || humanizeAutomationId(auto);
+        const cell = el.closest('[data-automation-id^="formField"]')
+          || el.closest('[data-automation-id]:not([role="group"])');
+        if (cell) {
+          // Only trust the container's label when the container really is one field.
+          const controls = cell.querySelectorAll('input:not([type="hidden"]), select, textarea, [role="combobox"]');
+          if (controls.length <= 2) {
+            const own = cell.querySelector('label, [id$="-label"], [class*="Label"], [class*="label"]');
+            if (own && !own.contains(el)) {
+              const t = own.textContent.replace(/\s+/g, ' ').replace(/[*\u2731]\s*$/, '').trim();
+              if (t && t.length <= 120) return t;
+            }
+          }
+          const auto = cell.getAttribute('data-automation-id') || '';
+          if (auto && auto !== 'formField') return humanizeAutomationId(auto.replace(/^formField-/, ''));
+        }
+        return humanizeAutomationId(el.getAttribute('data-automation-id') || '');
+      },
+      /** The repeating-entry wrapper: "Work Experience 2", "Education 1", "Address". */
+      sectionFor: (el) => {
+        const group = el.closest('div[role="group"], fieldset, [data-automation-id*="Section"]');
+        if (!group) return '';
+        return (group.getAttribute('aria-label')
+          || group.querySelector('h1,h2,h3,h4,h5,legend,[role="heading"]')?.textContent
+          || '').replace(/\s+/g, ' ').trim();
       },
       quirks: {
         listbox: '[data-automation-id*="dropdown"], button[aria-haspopup="listbox"]',

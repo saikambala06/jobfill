@@ -71,26 +71,38 @@
     return '';
   }
 
+  const CONTROL_SEL = 'input:not([type=hidden]), select, textarea, [role="combobox"], [contenteditable="true"]';
+  const LABELISH = 'label, legend, dt, th, .label, [class*="label"], [class*="Label"]';
+
   /**
-   * Walk up a few levels looking for the nearest preceding text node that reads
-   * like a label. Stops as soon as the container holds more than one control,
-   * which is what prevents a section heading being applied to every field under it.
+   * Walk up a few levels looking for the *nearest* preceding text that reads like
+   * a label.
+   *
+   * The ordering matters more than it looks. `querySelectorAll` returns document
+   * order, so taking the first preceding hit returns the element furthest from the
+   * input — typically a section heading or, worse, a div wrapping the previous
+   * field and its value. Scanning the candidates in reverse takes the closest one,
+   * which is the one a human would read as the label.
    */
   function labelFromProximity(el) {
     let node = el;
     for (let depth = 0; depth < 5 && node?.parentElement; depth++) {
       node = node.parentElement;
-      const controls = node.querySelectorAll('input:not([type=hidden]), select, textarea');
+      const controls = node.querySelectorAll(CONTROL_SEL);
       if (controls.length > 1 && depth > 0) break;
 
       // `td` matters here: Taleo, iCIMS and a lot of older career pages lay the form
       // out as a table, where the label is simply the cell to the left.
-      for (const cand of node.querySelectorAll('label, .label, [class*="label"], legend, dt, th, td, p, span, div')) {
+      const cands = node.querySelectorAll(`${LABELISH}, td, p, span, div`);
+      for (let i = cands.length - 1; i >= 0; i--) {
+        const cand = cands[i];
         if (cand.contains(el)) continue;
-        if (cand.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) {
-          const t = textOf(cand);
-          if (t.length >= 2 && t.length <= 200) return t;
-        }
+        // A candidate that holds a control of its own is a field wrapper, not a
+        // label — its text is some other field's *value*.
+        if (cand.querySelector(CONTROL_SEL)) continue;
+        if (!(cand.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+        const t = textOf(cand);
+        if (t.length >= 2 && t.length <= 200) return t;
       }
     }
     return '';
@@ -102,14 +114,22 @@
     return prev ? textOf(prev) : '';
   }
 
+  /**
+   * Precedence is deliberate. `<label for>` and `aria-labelledby` are declared by
+   * the page itself and point at exactly one control, so they outrank every
+   * heuristic including the adapter's. Running the adapter first — as this used to
+   * — let one platform quirk override ground truth on every field it touched.
+   */
   function resolveLabel(el, adapter) {
-    if (adapter?.labelFor) {
-      const custom = adapter.labelFor(el);
-      if (custom) return adapter.labelClean ? adapter.labelClean(custom) : custom;
-    }
-    const label =
+    let label =
       labelFromFor(el) ||
-      labelFromAria(el) ||
+      labelFromAria(el);
+
+    if (!label && adapter?.labelFor) {
+      try { label = adapter.labelFor(el) || ''; } catch { label = ''; }
+    }
+
+    label = label ||
       (adapter?.quirks?.tableLayout ? labelFromTableCell(el) : '') ||
       labelFromProximity(el) ||
       el.placeholder?.trim() ||
@@ -120,7 +140,10 @@
   }
 
   /** The nearest fieldset legend or heading — gives the AI grouping context. */
-  function resolveSection(el) {
+  function resolveSection(el, adapter) {
+    if (adapter?.sectionFor) {
+      try { const custom = adapter.sectionFor(el); if (custom) return custom.slice(0, 120); } catch { /* keep going */ }
+    }
     const legend = el.closest('fieldset')?.querySelector('legend');
     if (legend) return textOf(legend);
 
@@ -130,6 +153,57 @@
       if (h && !h.contains(el)) return textOf(h);
     }
     return '';
+  }
+
+  /* ------------------------------------------------ repeating sections -- */
+  /**
+   * Applications ask for the same six questions once per job and once per degree.
+   * "Job Title" inside "Work Experience 2" is a different question from the one in
+   * "Work Experience 1", and without an address for it every entry collapses onto
+   * employment[0] — which is how the second job ends up showing the first job's
+   * employer, and both degrees show the same university.
+   *
+   * Each field therefore carries `sectionKind` (what kind of repeating block it
+   * sits in) and `sectionIndex` (which occurrence, zero-based).
+   */
+  const SECTION_KINDS = [
+    ['employment', /work\s*experience|employment\s*(history|record)?|previous\s*(employer|position)|job\s*history|work\s*history/i],
+    ['education', /education|school|university|college|academic|qualification/i],
+    ['certification', /certificat|licen[cs]e|accreditation/i],
+    ['language', /^languages?\b/i],
+    ['reference', /reference/i],
+    ['address', /^address|mailing\s*address|home\s*address/i],
+    ['phone', /^phone|telephone|contact\s*number/i],
+  ];
+
+  function sectionKindOf(text) {
+    if (!text) return '';
+    for (const [kind, re] of SECTION_KINDS) if (re.test(text)) return kind;
+    return '';
+  }
+
+  /** The element that wraps one repeating entry, not the whole form. */
+  function sectionElOf(el) {
+    return el.closest('div[role="group"], fieldset, [data-automation-id*="Section"], [class*="repeat"], [class*="entry"]') || null;
+  }
+
+  /**
+   * Prefer the number the page itself prints ("Work Experience 2" → index 1).
+   * Fall back to the order the blocks appear in, which is what unnumbered forms
+   * (Greenhouse, Lever) give us.
+   */
+  function assignSectionIndexes(records) {
+    const seen = new Map(); // kind -> [containers, in document order]
+    for (const r of records) {
+      if (!r.sectionKind) continue;
+      const list = seen.get(r.sectionKind) || [];
+      const container = r.sectionEl || r.el;
+      let idx = list.indexOf(container);
+      if (idx === -1) { list.push(container); idx = list.length - 1; seen.set(r.sectionKind, list); }
+
+      const printed = /(\d+)\s*$/.exec(r.sectionText || '');
+      r.sectionIndex = printed ? Math.max(0, Number(printed[1]) - 1) : idx;
+    }
   }
 
   /** Helper/description text that often carries the word limit or format hint. */
@@ -144,18 +218,36 @@
   }
 
   /* ------------------------------------------------------------ selector -- */
+  /**
+   * How many elements share each id / name / automation-id, counted in a single
+   * sweep. Asking `document.querySelectorAll` per candidate attribute meant three
+   * whole-document queries for every field on the page — around 180 of them on a
+   * 60-field Workday step, repeated on every re-scan. One sweep answers all of it.
+   */
+  let uniq = { id: new Map(), name: new Map(), auto: new Map() };
+
+  function indexAttributes() {
+    const id = new Map(); const name = new Map(); const auto = new Map();
+    const bump = (map, key) => { if (key) map.set(key, (map.get(key) || 0) + 1); };
+    for (const el of document.querySelectorAll('[id],[name],[data-automation-id]')) {
+      bump(id, el.id);
+      bump(name, el.getAttribute('name'));
+      bump(auto, el.getAttribute('data-automation-id'));
+    }
+    uniq = { id, name, auto };
+  }
+
   /** A selector that survives re-render. Prefers stable attributes over nth-child. */
   function buildSelector(el) {
-    if (el.id && !/^\d/.test(el.id) && document.querySelectorAll(`#${CSS.escape(el.id)}`).length === 1) {
+    if (el.id && !/^\d/.test(el.id) && uniq.id.get(el.id) === 1) {
       return `#${CSS.escape(el.id)}`;
     }
     const auto = el.getAttribute('data-automation-id');
-    if (auto && document.querySelectorAll(`[data-automation-id="${auto}"]`).length === 1) {
+    if (auto && uniq.auto.get(auto) === 1) {
       return `[data-automation-id="${auto}"]`;
     }
-    if (el.name) {
-      const sel = `${el.tagName.toLowerCase()}[name="${CSS.escape(el.name)}"]`;
-      if (document.querySelectorAll(sel).length === 1) return sel;
+    if (el.name && uniq.name.get(el.name) === 1) {
+      return `${el.tagName.toLowerCase()}[name="${CSS.escape(el.name)}"]`;
     }
 
     const path = [];
@@ -225,10 +317,18 @@
   function deepQuery(root, selector) {
     const out = [];
     const walk = (node) => {
-      if (!node) return;
-      if (node.querySelectorAll) out.push(...node.querySelectorAll(selector));
-      const treeWalker = node.querySelectorAll ? node.querySelectorAll('*') : [];
-      for (const el of treeWalker) if (el.shadowRoot) walk(el.shadowRoot);
+      if (!node?.querySelectorAll) return;
+      out.push(...node.querySelectorAll(selector));
+
+      // Shadow hosts are rare; a TreeWalker finds them without a second full
+      // `querySelectorAll('*')` pass over every element in the subtree.
+      const NF = window.NodeFilter;
+      const walker = document.createTreeWalker(node, NF.SHOW_ELEMENT, {
+        acceptNode: (el) => (el.shadowRoot ? NF.FILTER_ACCEPT : NF.FILTER_SKIP),
+      });
+      const hosts = [];
+      while (walker.nextNode()) hosts.push(walker.currentNode);
+      for (const host of hosts) walk(host.shadowRoot);
     };
     walk(root);
     return out;
@@ -245,9 +345,20 @@
    * Detect every fillable field under the adapter's form root.
    * @returns {{adapter:object, fields:Array, page:object}}
    */
-  JF.detectFields = function detectFields() {
+  let cache = null;
+  const CACHE_MS = 1200;
+
+  JF.detectFields = function detectFields(opts = {}) {
+    // Detection is the expensive half of a fill and several callers ask for it in
+    // quick succession (scan, plan, then the observer). A short-lived cache makes
+    // the repeats free; anything that must see the current DOM passes `force`.
+    if (!opts.force && cache && Date.now() - cache.at < CACHE_MS && cache.href === location.href) {
+      return cache.result;
+    }
+
     const adapter = JF.detectAdapter();
     const root = adapter.root() || document.body;
+    indexAttributes();
 
     const raw = deepQuery(root, SELECTOR).filter((el) => {
       if (SKIP_TYPES.has((el.type || '').toLowerCase())) return false;
@@ -257,6 +368,7 @@
     });
 
     const fields = [];
+    const records = [];
     const radioGroups = new Map();
     let counter = 0;
 
@@ -271,7 +383,7 @@
         const legend = group?.querySelector('legend, [role="heading"], [class*="label"]');
         const groupLabel = (legend && !legend.contains(el) ? textOf(legend) : '')
           || resolveLabel(group || el.parentElement, adapter)
-          || resolveSection(el);
+          || resolveSection(el, adapter);
 
         const key = el.name || groupLabel;
         if (!radioGroups.has(key)) {
@@ -283,7 +395,7 @@
             selector: buildSelector(el),
             groupKey: key,
             label: groupLabel,
-            section: resolveSection(el),
+            section: resolveSection(el, adapter),
             required: el.required,
             options: [],
           });
@@ -298,6 +410,7 @@
       }
 
       const label = resolveLabel(el, adapter);
+      const sectionText = resolveSection(el, adapter);
       const field = {
         uid: `f${counter++}`,
         selector: buildSelector(el),
@@ -310,7 +423,9 @@
         ariaLabel: labelFromAria(el),
         placeholder: el.placeholder || '',
         autocomplete: el.getAttribute('autocomplete') || '',
-        section: resolveSection(el),
+        section: sectionText,
+        sectionKind: sectionKindOf(sectionText),
+        sectionIndex: 0,
         description: resolveDescription(el),
         required: Boolean(el.required || el.getAttribute('aria-required') === 'true'),
         maxLength: el.maxLength > 0 ? el.maxLength : undefined,
@@ -323,17 +438,29 @@
       };
 
       // Skip fields the user already filled — never clobber their own typing.
-      if (field.currentValue && field.control !== 'checkbox' && String(field.currentValue).trim()) {
+      // `jfUserEdited` is set by a trusted keystroke, so a field stays theirs even
+      // after they clear it and start again.
+      if (el.dataset?.jfUserEdited === '1') field.prefilled = true;
+      else if (field.currentValue && field.control !== 'checkbox' && String(field.currentValue).trim()) {
         field.prefilled = true;
       }
 
+      records.push({ ...field, el, sectionEl: sectionElOf(el), sectionText, sectionKind: field.sectionKind });
       fields.push(field);
+    }
+
+    // Indexes need the whole document-ordered set, so they are assigned in one
+    // pass once every field is known rather than guessed per field.
+    assignSectionIndexes(records);
+    for (const r of records) {
+      const f = fields.find((x) => x.uid === r.uid);
+      if (f) f.sectionIndex = r.sectionIndex ?? 0;
     }
 
     fields.push(...radioGroups.values());
     fields.sort((a, b) => Number(a.uid.slice(1)) - Number(b.uid.slice(1)));
 
-    return {
+    const result = {
       adapter: { id: adapter.id, name: adapter.name, quirks: adapter.quirks },
       fields,
       page: {
@@ -344,6 +471,8 @@
         role: guessRole(),
       },
     };
+    cache = { at: Date.now(), href: location.href, result };
+    return result;
   };
 
   function guessCompany() {

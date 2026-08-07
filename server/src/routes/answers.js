@@ -21,36 +21,48 @@ router.get('/', ah(async (req, res) => {
  * is what makes the "asked on 12 applications" signal in the dashboard real.
  */
 router.post('/bulk', ah(async (req, res) => {
-  const entries = Array.isArray(req.body?.answers) ? req.body.answers.slice(0, 60) : [];
+  const entries = Array.isArray(req.body?.answers) ? req.body.answers.slice(0, 120) : [];
   if (!entries.length) return res.status(400).json({ error: 'No answers were sent.' });
 
   const site = req.body.site;
   const ops = entries
-    .filter((e) => e.question?.trim() && String(e.answer ?? '').trim())
-    .map((e) => ({
-      updateOne: {
-        filter: { userId: req.user._id, normalized: normalizeQuestion(e.question) },
-        update: {
-          $set: {
-            question: e.question.trim(),
-            answer: String(e.answer).trim(),
-            control: e.control,
-            chosenOptions: e.chosenOptions || [],
-            canonicalKey: e.canonicalKey,
-            lastUsedAt: new Date(),
-            ...(e.source ? { source: e.source } : {}),
+    .filter((e) => e.question?.trim())
+    // A blank entry is only meaningful when it is flagged as a deliberate skip.
+    .filter((e) => e.skipped === true || String(e.answer ?? '').trim())
+    .map((e) => {
+      const skipped = e.skipped === true;
+      const scope = String(e.scope || '');
+      return {
+        updateOne: {
+          filter: { userId: req.user._id, normalized: normalizeQuestion(e.question), scope },
+          update: {
+            $set: {
+              question: e.question.trim(),
+              answer: skipped ? '' : String(e.answer).trim(),
+              skipped,
+              control: e.control,
+              chosenOptions: skipped ? [] : (e.chosenOptions || []),
+              canonicalKey: e.canonicalKey,
+              lastUsedAt: new Date(),
+              ...(e.source ? { source: e.source } : {}),
+            },
+            $setOnInsert: { userId: req.user._id, normalized: normalizeQuestion(e.question), scope },
+            $inc: { timesUsed: 1 },
+            ...(site ? { $addToSet: { sites: site } } : {}),
           },
-          $setOnInsert: { userId: req.user._id, normalized: normalizeQuestion(e.question) },
-          $inc: { timesUsed: 1 },
-          ...(site ? { $addToSet: { sites: site } } : {}),
+          upsert: true,
         },
-        upsert: true,
-      },
-    }));
+      };
+    });
 
   if (!ops.length) return res.status(400).json({ error: 'No answers were sent.' });
   const result = await Answer.bulkWrite(ops, { ordered: false });
-  res.json({ saved: ops.length, created: result.upsertedCount, updated: result.modifiedCount });
+  res.json({
+    saved: ops.length,
+    skipped: entries.filter((e) => e.skipped === true).length,
+    created: result.upsertedCount,
+    updated: result.modifiedCount,
+  });
 }));
 
 /** Live lookup used by the overlay when a user focuses a question mid-fill. */
@@ -58,7 +70,7 @@ router.post('/match', ah(async (req, res) => {
   const { question, threshold = 0.82 } = req.body || {};
   if (!question) return res.status(400).json({ error: 'No question was provided.' });
 
-  const stored = await Answer.find({ userId: req.user._id }).select('question answer timesUsed chosenOptions').lean();
+  const stored = await Answer.find({ userId: req.user._id, skipped: { $ne: true } }).select('question answer timesUsed chosenOptions').lean();
   const hit = findBestAnswer(question, stored, threshold);
 
   res.json({

@@ -21,6 +21,9 @@ Rules:
 6. EEO/diversity fields: use the profile value if present; otherwise omit. Never infer race, gender, disability or veteran status from a name or any other signal.
 7. Set needsReview true when confidence is below 0.75, when the answer is longer than 40 words, or when the field affects eligibility (visa, sponsorship, salary, criminal record, start date).
 8. Dates: return ISO YYYY-MM-DD unless the field's format hint says otherwise.
+9. Never reuse one value across two fields. A phone number answers "Phone Number" and nothing else — not "Phone Extension", not "Phone Device Type", not "Country Phone Code". If a neighbouring field has no data of its own, omit it.
+10. A field carries "section" and "sectionIndex" when it belongs to a repeating block. "Company" in section "Work Experience 2" means employment[1].company — read the matching entry, never the first one, and never the profile's current employer.
+11. Never split one value across fields or concatenate several into one. A street line is the street only; city, state, postcode and country each have their own field when the form provides them.
 
 Canonical profile keys available: ${CANONICAL_KEYS.join(', ')}.`;
 
@@ -31,6 +34,7 @@ export function buildPlannerUser({ profile, resumeText, priorAnswers, fields, pa
     control: f.control,
     type: f.type,
     section: f.section || undefined,
+    sectionIndex: f.sectionKind ? (f.sectionIndex ?? 0) : undefined,
     required: f.required || undefined,
     maxLength: f.maxLength || undefined,
     format: f.formatHint || undefined,
