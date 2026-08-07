@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "JobFill — AI application autofill",
+  "version": "1.0.0",
+  "description": "Fills job applications from your saved profile and résumé, remembers your answers, and flags what to check before you submit.",
+  "minimum_chrome_version": "116",
+
+  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "host_permissions": ["http://localhost:4000/*", "https://*/*"],
+
+  "background": { "service_worker": "background/service-worker.js", "type": "module" },
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Fill this application",
+    "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+  },
+
+  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
+
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://localhost/*"],
+      "js": [
+        "content/adapters.js",
+        "content/detector.js",
+        "content/filler.js",
+        "content/overlay.js",
+        "content/index.js"
+      ],
+      "css": ["content/content.css"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": false
+    }
+  ],
+
+  "commands": {
+    "autofill": {
+      "suggested_key": { "default": "Alt+Shift+F", "mac": "Alt+Shift+F" },
+      "description": "Fill this application"
+    },
+    "save-answers": {
+      "suggested_key": { "default": "Alt+Shift+S", "mac": "Alt+Shift+S" },
+      "description": "Save answers from this page"
+    }
+  },
+
+  "web_accessible_resources": [
+    { "resources": ["content/content.css"], "matches": ["https://*/*"] }
+  ]
+}

@@ -1,0 +1,217 @@
+/* JobFill popup — "carbon copy"
+   The whole surface is styled as a multi-part business form: mono keys, hairline
+   rules, one ballpoint-blue action, one pink alert. Motion is spent in exactly one
+   place (the fill button's stamp) so it reads as intentional rather than decorated. */
+
+:root {
+  --ink: #14161C;
+  --paper: #F4F6F9;
+  --carbon: #C8CEDA;
+  --blue: #2B4CF2;
+  --pink: #F25C7A;
+  --amber: #E0A82E;
+  --muted: #5A6274;
+  --rule: #DDE2EA;
+
+  --mono: ui-monospace, "IBM Plex Mono", "SF Mono", Menlo, monospace;
+  --sans: "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 340px;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+.view { padding: 0 0 14px; animation: rise .22s ease both; }
+@keyframes rise { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+
+/* ── masthead ─────────────────────────────────────────────────────────── */
+.masthead {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 16px 16px 14px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+.masthead.compact { padding: 12px 16px; }
+.masthead h1 {
+  font-size: 17px; font-weight: 650; letter-spacing: -.02em;
+  grid-column: 2;
+}
+.masthead .sub {
+  grid-column: 1 / -1;
+  font-size: 11.5px; color: #A8B0C0; margin-top: 2px;
+}
+.stamp {
+  font: 600 10px/1 var(--mono);
+  letter-spacing: .14em;
+  border: 1px solid var(--paper);
+  border-radius: 2px;
+  padding: 5px 6px;
+}
+.who { min-width: 0; }
+.who strong { display: block; font-size: 13px; font-weight: 600; }
+.who span {
+  display: block; font: 400 10.5px/1.3 var(--mono);
+  color: #A8B0C0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.icon-btn {
+  all: unset; cursor: pointer; color: #A8B0C0; font-size: 14px; padding: 4px 6px; border-radius: 3px;
+}
+.icon-btn:hover { color: var(--paper); }
+.icon-btn:focus-visible { outline: 1px solid var(--paper); }
+
+/* ── fields ───────────────────────────────────────────────────────────── */
+.form, .settings, .detect, .row-actions, .completeness, .tally,
+#fill, .note { margin: 0 16px; }
+
+.field { margin-top: 12px; }
+.field.tight { margin-top: 14px; }
+.field label {
+  display: block;
+  font: 500 10px/1 var(--mono);
+  letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+  margin-bottom: 5px;
+}
+.field input, .field select {
+  width: 100%;
+  font-family: var(--sans); font-size: 13px; color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-bottom: 1px solid var(--carbon);
+  border-radius: 3px;
+  padding: 8px 9px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.field input:focus, .field select:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: inset 0 -2px 0 0 var(--blue);
+}
+
+/* ── buttons ──────────────────────────────────────────────────────────── */
+.btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; cursor: pointer;
+  font: 600 12px/1 var(--sans); letter-spacing: .02em;
+  padding: 10px; margin-top: 12px;
+  border: 1px solid var(--ink); border-radius: 3px;
+  background: #fff; color: var(--ink);
+  transition: transform .1s ease, background .15s ease, box-shadow .15s ease;
+}
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn.primary:hover { background: #1E3AD4; }
+.btn.ghost:hover { background: #fff; border-color: var(--ink); }
+.btn.small { font-size: 11px; padding: 7px; margin-top: 0; }
+.btn:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+/* The one animated moment: the fill button presses like a rubber stamp. */
+.btn.big {
+  padding: 13px; font-size: 13px;
+  box-shadow: 3px 3px 0 rgba(20, 22, 28, .18);
+}
+.btn.big:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 rgba(20, 22, 28, 0);
+}
+.btn-key {
+  font: 500 9.5px/1 var(--mono); letter-spacing: .08em;
+  opacity: .65; border: 1px solid currentColor; border-radius: 2px; padding: 3px 4px;
+}
+.btn.busy .btn-label::after {
+  content: ''; display: inline-block; width: 1ch;
+  animation: dots 1.1s steps(4, end) infinite;
+}
+@keyframes dots { 0% { content: '' } 25% { content: '.' } 50% { content: '..' } 75% { content: '...' } }
+
+.linkish {
+  all: unset; cursor: pointer; display: block; width: 100%; text-align: center;
+  margin-top: 10px; font-size: 11.5px; color: var(--blue); text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.linkish:focus-visible { outline: 1px solid var(--blue); }
+
+.row-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+/* ── page detection stub ──────────────────────────────────────────────── */
+.detect {
+  margin-top: 14px; border: 1px solid var(--rule); border-radius: 3px;
+  background: #fff; overflow: hidden;
+}
+.detect-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 7px 10px; border-bottom: 1px dotted var(--rule);
+}
+.detect-row:last-child { border-bottom: 0; }
+.detect-row .k {
+  font: 500 9.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); width: 46px; flex: none;
+}
+.detect-row .v {
+  font-size: 12.5px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.detect.found { border-color: var(--blue); box-shadow: inset 2px 0 0 var(--blue); }
+.detect.none  { border-color: var(--carbon); }
+
+/* ── completeness ─────────────────────────────────────────────────────── */
+.completeness { margin-top: 16px; }
+.c-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+.c-head .k {
+  font: 500 9.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
+}
+.c-head .v { font: 600 13px/1 var(--sans); }
+.rule { height: 3px; background: var(--carbon); border-radius: 2px; overflow: hidden; }
+.rule i {
+  display: block; height: 100%; width: 0;
+  background: var(--blue);
+  transition: width .5s cubic-bezier(.4, 0, .2, 1);
+}
+.hint { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+/* ── tally ────────────────────────────────────────────────────────────── */
+.tally {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+  margin-top: 16px; background: var(--rule);
+  border: 1px solid var(--rule); border-radius: 3px; overflow: hidden;
+}
+.tally > div { background: #fff; padding: 9px 8px; }
+.tally dt {
+  font: 500 9px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+.tally dd { font: 650 17px/1.1 var(--sans); letter-spacing: -.02em; margin-top: 3px; }
+
+/* ── messages ─────────────────────────────────────────────────────────── */
+.error {
+  margin-top: 10px; padding: 8px 9px; font-size: 11.5px;
+  color: #8A1F3A; background: rgba(242, 92, 122, .1);
+  border-left: 2px solid var(--pink); border-radius: 2px;
+}
+.note {
+  margin-top: 9px; padding: 8px 9px; font-size: 11.5px;
+  background: #fff; border-left: 2px solid var(--blue); border-radius: 2px;
+}
+.note.warn { border-left-color: var(--amber); background: rgba(224, 168, 46, .1); }
+
+.settings { margin-top: 16px; border-top: 1px dotted var(--rule); padding-top: 10px; }
+.settings summary {
+  cursor: pointer; font: 500 10px/1 var(--mono);
+  letter-spacing: .12em; text-transform: uppercase; color: var(--muted); list-style: none;
+}
+.settings summary::-webkit-details-marker { display: none; }
+.settings summary::before { content: '+ '; }
+.settings[open] summary::before { content: '– '; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

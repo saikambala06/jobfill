@@ -1,0 +1,317 @@
+/* ════════════════════════════════════════════════════════════════════════
+   JobFill — "Carbon Copy"
+
+   The subject is the application form itself, so the interface is built from a
+   form's own materials: mono field keys, hairline and dotted rules, register
+   marks, and the two ink colours a real multi-part form uses — ballpoint blue
+   for what you wrote, carbon pink for the copy underneath.
+
+   Boldness is spent in one place: the fill trace on the overview. Everything
+   else stays quiet.
+   ════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --ink:      #14161C;
+  --ink-70:   #4A5262;
+  --ink-45:   #6C7488;
+  --paper:    #E9EBEF;
+  --sheet:    #FFFFFF;
+  --carbon:   #C8CEDA;
+  --rule:     #DDE2EA;
+  --blue:     #2B4CF2;
+  --blue-ink: #1E3AD4;
+  --pink:     #F25C7A;
+  --amber:    #E0A82E;
+  --green:    #2E7D5B;
+
+  --display: "Bricolage Grotesque", "Public Sans", system-ui, sans-serif;
+  --sans:    "Public Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mono:    "IBM Plex Mono", ui-monospace, Menlo, monospace;
+
+  --r: 3px;
+  --shadow: 4px 4px 0 rgba(20, 22, 28, .10);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--blue); text-underline-offset: 2px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+:focus-visible { outline: 2px solid var(--pink); outline-offset: 2px; border-radius: 2px; }
+
+/* ── type roles ───────────────────────────────────────────────────────── */
+.display {
+  font-family: var(--display);
+  font-weight: 800;
+  letter-spacing: -.035em;
+  line-height: .96;
+}
+.key {
+  font: 500 10px/1 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-45);
+}
+.num {
+  font-family: var(--display);
+  font-weight: 800;
+  letter-spacing: -.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── shell ────────────────────────────────────────────────────────────── */
+.shell { display: grid; grid-template-columns: 224px 1fr; min-height: 100vh; }
+
+.rail {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 22px 0 22px;
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh;
+}
+.rail-mark {
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 20px 20px;
+  border-bottom: 1px solid rgba(244, 246, 249, .16);
+}
+.rail-mark .stamp {
+  font: 600 11px/1 var(--mono); letter-spacing: .14em;
+  border: 1px solid var(--paper); border-radius: 2px; padding: 6px 7px;
+}
+.rail-mark b { font-family: var(--display); font-size: 17px; font-weight: 800; letter-spacing: -.03em; }
+
+.rail-nav { padding: 14px 0; flex: 1; }
+/* Nav items are numbered because a profile genuinely is filled in order — the
+   number is the section index on the form, not decoration. */
+.rail-link {
+  display: grid; grid-template-columns: 24px 1fr auto;
+  align-items: center; gap: 10px;
+  padding: 9px 20px;
+  color: #A8B0C0; text-decoration: none;
+  font-size: 13.5px; font-weight: 500;
+  border-left: 2px solid transparent;
+  transition: color .15s ease, background .15s ease;
+}
+.rail-link .idx { font: 500 10px/1 var(--mono); opacity: .55; }
+.rail-link:hover { color: var(--paper); background: rgba(244, 246, 249, .05); }
+.rail-link.on {
+  color: var(--paper);
+  background: rgba(43, 76, 242, .18);
+  border-left-color: var(--blue);
+}
+.rail-link.on .idx { opacity: 1; color: var(--blue); }
+.rail-link .badge {
+  font: 500 10px/1 var(--mono); background: rgba(244, 246, 249, .14);
+  padding: 3px 5px; border-radius: 2px;
+}
+
+.rail-foot { padding: 0 20px; border-top: 1px solid rgba(244, 246, 249, .16); padding-top: 16px; }
+.rail-foot .who { font-size: 12px; }
+.rail-foot .who b { display: block; font-weight: 600; }
+.rail-foot .who span { font: 400 10.5px/1.4 var(--mono); color: #A8B0C0; word-break: break-all; }
+
+.main { padding: 34px 40px 72px; max-width: 1140px; }
+
+/* ── page header ──────────────────────────────────────────────────────── */
+.page-head { margin-bottom: 28px; }
+.page-head .eyebrow { margin-bottom: 9px; }
+.page-head h1 { font-family: var(--display); font-size: clamp(30px, 4.4vw, 46px); font-weight: 800; letter-spacing: -.038em; line-height: .98; }
+.page-head p { color: var(--ink-70); margin-top: 9px; max-width: 56ch; }
+
+/* ── the fill trace: signature element ───────────────────────────────────
+   A form line that draws itself, with the carbon copy trailing a beat behind
+   and snapping into register. Used once, on the overview hero. */
+.trace-block { background: var(--sheet); border: 1px solid var(--ink); border-radius: var(--r); padding: 26px 28px; box-shadow: var(--shadow); }
+.trace-line { position: relative; padding-bottom: 13px; margin-bottom: 15px; }
+.trace-line:last-child { margin-bottom: 0; }
+.trace-line .rule-base {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+  background: repeating-linear-gradient(90deg, var(--carbon) 0 4px, transparent 4px 8px);
+}
+.trace-line .rule-ink {
+  position: absolute; left: 0; bottom: 0; height: 2px; background: var(--blue); transform-origin: left;
+}
+.trace-line .rule-copy {
+  position: absolute; left: 0; bottom: -2px; height: 2px; background: var(--pink); transform-origin: left; opacity: .5;
+}
+.trace-line .label { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
+.trace-line .val { font-family: var(--display); font-size: 30px; font-weight: 800; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+
+/* ── cards & panels ───────────────────────────────────────────────────── */
+.panel {
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+}
+.panel.inked { border-color: var(--ink); box-shadow: var(--shadow); }
+.panel-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 13px 16px; border-bottom: 1px solid var(--rule);
+}
+.panel-body { padding: 16px; }
+
+.grid { display: grid; gap: 14px; }
+.grid.c2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid.c3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.c4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+/* ── form rows: label column + value column, hairline between ─────────── */
+.frow {
+  display: grid; grid-template-columns: 168px 1fr; gap: 16px;
+  padding: 11px 0; border-bottom: 1px dotted var(--rule);
+  align-items: start;
+}
+.frow:last-child { border-bottom: 0; }
+.frow > label { padding-top: 8px; }
+
+.input, .select, .textarea {
+  width: 100%;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-bottom-color: var(--carbon);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.input:focus, .select:focus, .textarea:focus {
+  outline: none; border-color: var(--blue); box-shadow: inset 0 -2px 0 0 var(--blue);
+}
+.input::placeholder, .textarea::placeholder { color: #9AA2B4; }
+.textarea { min-height: 96px; resize: vertical; font-family: inherit; }
+/* A field carrying a value gets the ballpoint underline — same language as the
+   extension's fill trace, so the two halves of the product read as one thing. */
+.input.has-value { box-shadow: inset 0 -2px 0 0 var(--blue); border-bottom-color: var(--blue); }
+
+/* ── buttons ──────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  cursor: pointer; font-weight: 600; font-size: 13px; letter-spacing: .01em;
+  padding: 9px 15px; border-radius: var(--r);
+  border: 1px solid var(--ink); background: var(--sheet); color: var(--ink);
+  transition: background .15s ease, transform .1s ease, box-shadow .15s ease;
+}
+.btn:hover { background: var(--paper); }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; box-shadow: 3px 3px 0 rgba(20,22,28,.16); }
+.btn.primary:hover { background: var(--blue-ink); }
+.btn.primary:active { transform: translate(3px, 3px); box-shadow: none; }
+.btn.quiet { border-color: var(--rule); color: var(--ink-70); }
+.btn.quiet:hover { border-color: var(--ink); color: var(--ink); }
+.btn.danger { border-color: var(--pink); color: #8A1F3A; }
+.btn.danger:hover { background: rgba(242,92,122,.09); }
+.btn.sm { font-size: 11.5px; padding: 6px 10px; }
+.btn:disabled { opacity: .5; cursor: default; transform: none; }
+
+/* ── tags ─────────────────────────────────────────────────────────────── */
+.tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: 600 9.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  padding: 4px 6px; border-radius: 2px; border: 1px solid currentColor;
+}
+.tag.blue { color: var(--blue); }
+.tag.pink { color: var(--pink); }
+.tag.green { color: var(--green); }
+.tag.grey { color: var(--ink-45); }
+.tag.solid { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+/* ── lists ────────────────────────────────────────────────────────────── */
+.list-row {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 13px 16px; border-bottom: 1px dotted var(--rule);
+}
+.list-row:last-child { border-bottom: 0; }
+.list-row:hover { background: #FAFBFC; }
+.list-row .grow { flex: 1; min-width: 0; }
+
+/* ── empty states are invitations, not apologies ─────────────────────── */
+.empty { padding: 40px 20px; text-align: center; }
+.empty .mark {
+  width: 44px; height: 44px; margin: 0 auto 14px;
+  border: 1px dashed var(--carbon); border-radius: var(--r);
+  display: grid; place-items: center;
+  font: 500 12px/1 var(--mono); color: var(--ink-45);
+}
+.empty h3 { font-family: var(--display); font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.empty p { color: var(--ink-70); font-size: 13px; margin: 6px auto 14px; max-width: 40ch; }
+
+/* ── messages ─────────────────────────────────────────────────────────── */
+.msg { padding: 10px 12px; border-radius: var(--r); font-size: 13px; border-left: 2px solid; }
+.msg.error { color: #8A1F3A; background: rgba(242,92,122,.08); border-color: var(--pink); }
+.msg.ok    { color: #1A5C40; background: rgba(46,125,91,.08);  border-color: var(--green); }
+.msg.warn  { color: #7A5400; background: rgba(224,168,46,.11); border-color: var(--amber); }
+
+/* ── sign-in: the page is one big form field ─────────────────────────── */
+.gate { min-height: 100vh; display: grid; grid-template-columns: 1.05fr .95fr; }
+.gate-art {
+  background: var(--ink); color: var(--paper);
+  padding: 52px 48px; display: flex; flex-direction: column; justify-content: space-between;
+  position: relative; overflow: hidden;
+}
+.gate-art h1 {
+  font-family: var(--display); font-size: clamp(38px, 5vw, 62px);
+  font-weight: 800; letter-spacing: -.045em; line-height: .94; max-width: 12ch;
+}
+.gate-art .lede { color: #A8B0C0; max-width: 34ch; margin-top: 16px; font-size: 15px; }
+.gate-form { display: grid; place-items: center; padding: 40px 32px; }
+.gate-form .inner { width: 100%; max-width: 348px; }
+
+/* Ambient register marks — the alignment crosses printed on real carbon forms. */
+.reg { position: absolute; width: 15px; height: 15px; opacity: .17; }
+.reg::before, .reg::after { content: ''; position: absolute; background: var(--paper); }
+.reg::before { left: 50%; top: 0; bottom: 0; width: 1px; }
+.reg::after { top: 50%; left: 0; right: 0; height: 1px; }
+
+.spinner {
+  width: 13px; height: 13px; border: 2px solid currentColor;
+  border-right-color: transparent; border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg) } }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; padding: 5px 9px;
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 20px;
+}
+.chip button { all: unset; cursor: pointer; color: var(--ink-45); line-height: 1; }
+.chip button:hover { color: var(--pink); }
+
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.muted { color: var(--ink-70); }
+.tiny { font-size: 12px; }
+
+/* ── responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; flex-direction: row; align-items: center; padding: 12px 16px; overflow-x: auto; }
+  .rail-mark { border-bottom: 0; border-right: 1px solid rgba(244,246,249,.16); padding: 0 16px 0 0; margin-right: 12px; }
+  .rail-nav { display: flex; padding: 0; gap: 4px; }
+  .rail-link { border-left: 0; border-bottom: 2px solid transparent; padding: 7px 11px; white-space: nowrap; grid-template-columns: auto; }
+  .rail-link.on { border-left-color: transparent; border-bottom-color: var(--blue); }
+  .rail-link .idx, .rail-link .badge { display: none; }
+  .rail-foot { display: none; }
+  .main { padding: 22px 18px 56px; }
+  .gate { grid-template-columns: 1fr; }
+  .gate-art { padding: 34px 24px; }
+  .grid.c3, .grid.c4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .frow { grid-template-columns: 1fr; gap: 5px; }
+  .frow > label { padding-top: 0; }
+}
+@media (max-width: 560px) {
+  .grid.c2, .grid.c3, .grid.c4 { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

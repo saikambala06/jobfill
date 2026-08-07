@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>JobFill</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+<!-- ── signed out ────────────────────────────────────────────────────────── -->
+<section id="auth" class="view" hidden>
+  <header class="masthead">
+    <span class="stamp">JF</span>
+    <h1>JobFill</h1>
+    <p class="sub">Fill applications from one saved profile.</p>
+  </header>
+
+  <form id="auth-form" class="form" novalidate>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required minlength="8" />
+    </div>
+    <div class="field" id="name-field" hidden>
+      <label for="name">Name</label>
+      <input id="name" type="text" autocomplete="name" />
+    </div>
+
+    <p id="auth-error" class="error" role="alert" hidden></p>
+    <button type="submit" class="btn primary" id="auth-submit">Sign in</button>
+    <button type="button" class="linkish" id="auth-toggle">Create an account instead</button>
+  </form>
+
+  <details class="settings">
+    <summary>Server</summary>
+    <div class="field">
+      <label for="api-base">API address</label>
+      <input id="api-base" type="url" placeholder="https://your-api.vercel.app" />
+    </div>
+    <button type="button" class="btn ghost small" id="save-api">Save address</button>
+  </details>
+</section>
+
+<!-- ── signed in ─────────────────────────────────────────────────────────── -->
+<section id="main" class="view" hidden>
+  <header class="masthead compact">
+    <span class="stamp">JF</span>
+    <div class="who">
+      <strong id="user-name">—</strong>
+      <span id="user-email"></span>
+    </div>
+    <button class="icon-btn" id="logout" title="Sign out" aria-label="Sign out">⏻</button>
+  </header>
+
+  <!-- page status reads like a form's own detection stub -->
+  <div class="detect" id="detect">
+    <div class="detect-row">
+      <span class="k">Form</span>
+      <span class="v" id="detect-ats">Scanning…</span>
+    </div>
+    <div class="detect-row">
+      <span class="k">Fields</span>
+      <span class="v" id="detect-count">—</span>
+    </div>
+    <div class="detect-row">
+      <span class="k">Role</span>
+      <span class="v" id="detect-role">—</span>
+    </div>
+  </div>
+
+  <div class="field tight">
+    <label for="resume">Attach</label>
+    <select id="resume"></select>
+  </div>
+
+  <button class="btn primary big" id="fill">
+    <span class="btn-label">Fill this application</span>
+    <span class="btn-key">⌥⇧F</span>
+  </button>
+  <p id="fill-note" class="note" hidden></p>
+
+  <div class="row-actions">
+    <button class="btn ghost small" id="save-answers">Save answers</button>
+    <button class="btn ghost small" id="open-dashboard">Dashboard</button>
+  </div>
+
+  <!-- profile completeness: a filled-in form rule, not a progress bar -->
+  <div class="completeness">
+    <div class="c-head">
+      <span class="k">Profile</span>
+      <span class="v" id="completeness-pct">—</span>
+    </div>
+    <div class="rule"><i id="completeness-bar"></i></div>
+    <p class="hint" id="completeness-hint">Loading your profile…</p>
+  </div>
+
+  <dl class="tally">
+    <div><dt>Applications</dt><dd id="stat-apps">—</dd></div>
+    <div><dt>Fields filled</dt><dd id="stat-fields">—</dd></div>
+    <div><dt>Saved answers</dt><dd id="stat-answers">—</dd></div>
+  </dl>
+</section>
+
+<script src="popup.js"></script>
+</body>
+</html>

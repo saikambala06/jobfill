@@ -1,0 +1,13 @@
+
+# corrupted partial install left by the build sandbox — safe to delete
+*.log
+.DS_Store
+.broken_nm2_ignore/
+.broken_nm_ignore/
+.env
+.env.local
+.vercel
+dashboard/.broken_nm_ignore
+dashboard/.broken_nm_ignore/
+dist/
+node_modules/

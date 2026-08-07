@@ -1,0 +1,48 @@
+<!doctype html><html><body>
+<div id="grnhse_app">
+<form id="application_form">
+  <h3>Personal information</h3>
+
+  <label for="first_name">First Name *</label>
+  <input id="first_name" name="job_application[first_name]" type="text" required>
+
+  <label for="last_name">Last Name *</label>
+  <input id="last_name" name="job_application[last_name]" type="text" required>
+
+  <div><span id="lbl-email">Email</span>
+    <input id="email" type="email" aria-labelledby="lbl-email"></div>
+
+  <div class="field"><div class="label">Phone</div>
+    <input id="phone" type="tel"></div>
+
+  <label for="resume">Resume/CV</label>
+  <input id="resume" type="file">
+
+  <h3>Details</h3>
+
+  <label for="linkedin">LinkedIn Profile</label>
+  <input id="linkedin" type="url">
+
+  <label for="country">Country</label>
+  <select id="country">
+    <option value="">Please select</option>
+    <option value="us">United States</option>
+    <option value="in">India</option>
+    <option value="gb">United Kingdom</option>
+  </select>
+
+  <fieldset>
+    <legend>Will you now or in the future require sponsorship for employment visa status?</legend>
+    <label for="sp_y">Yes</label><input type="radio" id="sp_y" name="sponsorship" value="Yes">
+    <label for="sp_n">No</label><input type="radio" id="sp_n" name="sponsorship" value="No">
+  </fieldset>
+
+  <label for="why">Why do you want to work at Acme?</label>
+  <textarea id="why" maxlength="1200"></textarea>
+
+  <table><tr><td>Notice period</td><td><input id="notice" type="text"></td></tr></table>
+
+  <input type="hidden" name="csrf_token" value="xyz">
+  <input type="submit" value="Submit">
+</form>
+</div></body></html>

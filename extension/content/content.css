@@ -1,0 +1,25 @@
+/* The fill trace, applied to the page's own fields.
+   A ballpoint-blue rule means filled from your data; pink means check it before
+   you submit. Both fade the moment the user edits the field themselves. */
+
+.jf-filled {
+  box-shadow: inset 0 -2px 0 0 #2B4CF2 !important;
+  background-image: linear-gradient(90deg, rgba(43,76,242,.055), rgba(43,76,242,0)) !important;
+  transition: box-shadow .25s ease, background-image .25s ease;
+}
+.jf-review {
+  box-shadow: inset 0 -2px 0 0 #F25C7A !important;
+  background-image: linear-gradient(90deg, rgba(242,92,122,.075), rgba(242,92,122,0)) !important;
+}
+.jf-ai::after { content: none; }
+
+@keyframes jf-register {
+  0%   { transform: translateX(-3px); opacity: .35 }
+  60%  { transform: translateX(1px);  opacity: 1 }
+  100% { transform: none }
+}
+.jf-filled { animation: jf-register .26s cubic-bezier(.2,.9,.3,1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .jf-filled { animation: none; }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "jobfill-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test.mjs && node dom-test.mjs && node pipeline-test.mjs"
+  },
+  "devDependencies": { "jsdom": "^24.1.0" }
+}
