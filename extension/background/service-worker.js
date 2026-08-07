@@ -87,6 +87,24 @@ const HANDLERS = {
   },
 };
 
+/**
+ * Side-panel lifecycle.
+ *
+ * `openPanelOnActionClick` (set below) is what makes one toolbar icon do all
+ * three things the user expects: click to open, click again to close it
+ * completely (Chrome tears the panel's document down, it isn't just hidden),
+ * click a third time to open it fresh. This connection only exists so the
+ * worker can log/react to that teardown if it ever needs to — the panel
+ * itself already resets its own view on every boot (see sidepanel.js).
+ */
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'jobfill-panel') return;
+  port.onDisconnect.addListener(() => {
+    // Panel fully closed. Nothing to persist here on purpose — the next open
+    // is meant to start newly rather than resume the last application.
+  });
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   if (msg.type === 'PAGE_READY') {
     // Badge the tab so the user knows a fillable form was recognised.

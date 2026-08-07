@@ -18,6 +18,21 @@ let mode = 'login';
 let formTab = null;
 let rows = [];
 
+// True only while the "recording this application → next step" sequence owns
+// the refresh. The tab-navigation listener below backs off during that window
+// so the two refreshes don't stack and make the whole panel look like it is
+// reloading — one controlled rescan happens, right after the animation ends.
+let awaitingNextStep = false;
+
+/**
+ * The toolbar icon already opens/closes the panel natively (Chrome destroys and
+ * rebuilds this document each time — see background/service-worker.js). This
+ * connection just gives the worker a signal for when that teardown happens, so
+ * a click that reopens the panel is guaranteed to start from a clean slate
+ * rather than anything cached from the application that was open before.
+ */
+chrome.runtime.connect({ name: 'jobfill-panel' });
+
 /* ---------------------------------------------------------------- boot -- */
 async function currentTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -25,6 +40,12 @@ async function currentTab() {
 }
 
 (async function boot() {
+  // Belt-and-suspenders reset: even if a future Chrome build ever kept this
+  // document alive across a close, the panel should still look brand-new the
+  // moment it reopens — no leftover trace rows or notes from the last job.
+  clearResults();
+  $('fill-note').hidden = true;
+
   formTab = await currentTab();
 
   const { apiBase } = await chrome.storage.local.get('apiBase');
@@ -41,6 +62,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, info) => {
   const tab = await currentTab();
   if (tab?.id !== tabId) return;
   formTab = tab;
+  // While the done-dialog is already polling for the next step, let that one
+  // controlled rescan own the refresh instead of racing it here — otherwise
+  // the detect box clears and repopulates twice in a row, which reads as the
+  // whole panel reloading rather than one clean update after the animation.
+  if (awaitingNextStep) return;
   clearResults();
   refreshPage();
 });
@@ -268,15 +294,21 @@ $('auto-steps').onchange = async (e) => {
   await chrome.storage.local.set({ autoFillNewSteps: e.target.checked });
 };
 
-/* ----------------------------------------------------------- done ------ */
+/* ------------------------------------------------------ refresh / done ------ */
 const dialog = {
   open() { $('scrim').hidden = false; $('dlg-ask').hidden = false; $('dlg-busy').hidden = true; $('dlg-ok').focus(); },
-  busy(text) { $('dlg-ask').hidden = true; $('dlg-busy').hidden = false; $('dlg-busy-text').textContent = text; },
-  close() { $('scrim').hidden = true; },
+  busy(text) {
+    $('dlg-ask').hidden = true; $('dlg-busy').hidden = false; $('dlg-busy-text').textContent = text;
+    $('refresh-app').classList.add('spinning');
+  },
+  close() {
+    $('scrim').hidden = true;
+    $('refresh-app').classList.remove('spinning');
+  },
 };
 
-$('done').onclick = () => dialog.open();
-$('dlg-cancel').onclick = () => dialog.close();
+$('refresh-app').onclick = () => dialog.open();
+$('dlg-cancel').onclick = () => dialog.close(); // "Not yet" — pop the dialog only, nothing else changes.
 $('scrim').onclick = (e) => { if (e.target === $('scrim')) dialog.close(); };
 
 /**
@@ -288,10 +320,12 @@ $('scrim').onclick = (e) => { if (e.target === $('scrim')) dialog.close(); };
  * you supervise.
  */
 $('dlg-ok').onclick = async () => {
+  awaitingNextStep = true;
   dialog.busy('Recording this application…');
 
   const res = await send('COMPLETE_APPLICATION', { url: formTab?.url, title: formTab?.title });
   if (!res?.ok) {
+    awaitingNextStep = false;
     dialog.close();
     showNote(res?.error || 'Could not record the application.', true);
     return;
@@ -301,7 +335,11 @@ $('dlg-ok').onclick = async () => {
   dialog.busy('Looking for the next step…');
 
   // Give the page a moment to navigate before deciding there is nothing left.
+  // This is the single rescan that loads fresh field data once the animation
+  // is done — the tab listener above stays quiet the whole time so nothing
+  // else refreshes underneath it.
   const next = await waitForNextStep();
+  awaitingNextStep = false;
   dialog.close();
 
   if (!next) {
