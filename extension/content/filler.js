@@ -48,60 +48,50 @@
   };
 
   function setNativeValue(el, value) {
-    // React caches the last value it saw on the node and ignores an `input` event
-    // whose value matches that cache. Clearing the tracker first guarantees the
-    // change is seen as a change.
-    const tracker = el._valueTracker;
-    if (tracker?.setValue) { try { tracker.setValue(''); } catch { /* not React */ } }
-
     const setter = nativeSetters[el.tagName.toLowerCase()];
     if (setter) setter.call(el, value);
     else el.value = value;
   }
 
   /**
-   * Fire the event sequence a real user produces. Order matters: Angular listens
-   * on `input` + `blur`, React on `input` + `change`, Vue on `input`, and several
-   * validation libraries only run on `blur`.
+   * React remembers the last value it saw in a tracker hung off the node. The
+   * native setter bypasses that tracker, which is normally what we want — the
+   * change looks new and `onChange` fires. But after a re-render the tracker can
+   * already hold the string we are about to write, and then React concludes
+   * nothing changed and never tells the form. Forcing the tracker to something
+   * else first removes that coin-flip.
    */
-  function fireEvents(el, { keys = false } = {}) {
-    const opts = { bubbles: true, cancelable: true };
-    if (keys) {
-      el.dispatchEvent(new KeyboardEvent('keydown', { ...opts, key: 'a' }));
-      el.dispatchEvent(new KeyboardEvent('keypress', { ...opts, key: 'a' }));
-    }
-    // A plain Event named "input" is not an InputEvent. Frameworks that read
-    // `inputType` treat the plain one as synthetic and ignore it.
-    try {
-      el.dispatchEvent(new InputEvent('input', { ...opts, inputType: 'insertText', data: String(el.value ?? '') }));
-    } catch {
-      el.dispatchEvent(new Event('input', opts));
-    }
-    el.dispatchEvent(new Event('change', opts));
-    if (keys) el.dispatchEvent(new KeyboardEvent('keyup', { ...opts, key: 'a' }));
+  function resetTracker(el, incoming) {
+    const tracker = el._valueTracker;
+    if (!tracker || typeof tracker.setValue !== 'function') return;
+    try { tracker.setValue(String(incoming) === '' ? ' ' : ''); } catch { /* not fatal */ }
+  }
+
+  const W = typeof window !== 'undefined' ? window : globalThis;
+
+  /** Build an event with the richest constructor available, degrading quietly. */
+  function ev(ctor, type, init = {}) {
+    const Ctor = W[ctor] || W.Event;
+    try { return new Ctor(type, init); } catch { /* fall through */ }
+    return new W.Event(type, { bubbles: init.bubbles, cancelable: init.cancelable });
   }
 
   /**
-   * Make the page believe the user has finished with this field.
+   * Fire the event sequence a real user produces.
    *
-   * This is the step that was missing, and it is why Workday kept reporting
-   * "First Name is required and must have a value" under a box that plainly had a
-   * name in it. Workday commits what you typed to its own model when focus leaves,
-   * and the old code dispatched `new Event('blur')` — which does not bubble, so a
-   * handler listening on the form container never heard it — without ever moving
-   * focus. The value sat in the DOM and nowhere else.
+   * The keystrokes now bracket the write instead of trailing it. Firing keydown
+   * *after* the value was already set described an impossible sequence, and the
+   * ATSs that listen to both — Workday's masked inputs among them — re-read the
+   * box on keydown and saw the new value arrive before the key that supposedly
+   * caused it.
    */
-  function commitField(el) {
-    // FocusEvent is the right constructor but not guaranteed to exist in every
-    // context this script runs in; a bubbling Event of the same name is read
-    // identically by a listener.
-    const Focus = window.FocusEvent || window.Event || Event;
-    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-    // focusout is the bubbling counterpart of blur, and the one React's onBlur
-    // and Workday's own delegated handlers are actually listening for.
-    el.dispatchEvent(new Focus('focusout', { bubbles: true, cancelable: false }));
-    el.dispatchEvent(new Focus('blur', { bubbles: false, cancelable: false }));
-    try { el.blur(); } catch { /* detached */ }
+  function fireEvents(el, { keys = false, data = null } = {}) {
+    const opts = { bubbles: true, cancelable: true };
+    el.dispatchEvent(ev('InputEvent', 'input', {
+      bubbles: true, cancelable: false, inputType: 'insertText', data,
+    }));
+    el.dispatchEvent(ev('Event', 'change', opts));
+    if (keys) el.dispatchEvent(ev('KeyboardEvent', 'keyup', { ...opts, key: 'a' }));
   }
 
   function focusFirst(el) {
@@ -109,7 +99,89 @@
       el.scrollIntoView({ block: 'center', behavior: 'instant' });
       el.focus({ preventScroll: true });
     } catch { /* detached nodes are non-fatal */ }
+    // Widgets that park focus on a wrapper never get a focus event from the line
+    // above, and some of them only start listening once they have had one.
+    if (W.document?.activeElement !== el) {
+      el.dispatchEvent(ev('FocusEvent', 'focus', { bubbles: false }));
+      el.dispatchEvent(ev('FocusEvent', 'focusin', { bubbles: true }));
+    }
   }
+
+  /**
+   * Leave the field the way a person does.
+   *
+   * `blur` does not bubble, and React 17 and later stopped listening for it
+   * directly — they delegate `onBlur` from `focusout` on the root container. So a
+   * dispatched, bubbling `blur` event, which is what this used to send, arrived
+   * nowhere. On Workday that is the whole bug behind "the field First Name is
+   * required and must have a value" sitting under a box with a name in it: the
+   * validator that copies the DOM value into Workday's own model runs on blur,
+   * it never ran, and the model stayed empty while the input looked filled.
+   */
+  function commitBlur(el) {
+    el.dispatchEvent(ev('Event', 'change', { bubbles: true, cancelable: true }));
+    const focused = W.document?.activeElement === el;
+    if (focused) { try { el.blur(); } catch { /* detached */ } }
+    // Only synthesise when the real thing did not happen, so pages that validate
+    // on blur are not asked to do it twice.
+    if (!focused || W.document?.activeElement === el) {
+      el.dispatchEvent(ev('FocusEvent', 'blur', { bubbles: false }));
+      el.dispatchEvent(ev('FocusEvent', 'focusout', { bubbles: true }));
+    }
+  }
+
+  /* --------------------------------------------------- validation state -- */
+  /**
+   * Deliberately stricter than "mentions the word required".
+   *
+   * Plenty of forms print a standing "Required" hint beside every mandatory box,
+   * and reading those as failures would send the slow retry path over a whole
+   * page of fields that were never wrong. What is matched here is the shape of a
+   * *complaint* — a statement about this field having gone wrong — rather than a
+   * label describing what the field wants.
+   */
+  const ERROR_TEXT = /is required|are required|required and|must have a value|must be |must contain|cannot be|can't be |is invalid|not valid|please (enter|select|provide|choose)/i;
+  const ERROR_SEL = [
+    '[data-automation-id="errorMessage"]',      // Workday
+    '[role="alert"]',
+    '[id$="-error"]', '[id$="_error"]',
+    '.error', '.field-error', '.invalid-feedback', '.Mui-error',
+    '[class*="rror"]',                          // errorMessage / hasError / isError
+  ].join(', ');
+
+  /**
+   * Is the page currently complaining about this field, and what is it saying?
+   *
+   * Used to tell "we wrote it and the form accepted it" apart from "we wrote it
+   * and the form still thinks it is empty" — a distinction the old code could not
+   * make, so a fill that left every required field flagged still reported success.
+   *
+   * The message is looked for before `aria-invalid` because the message is the
+   * part worth repeating back to the user. `aria-invalid` alone is a real signal
+   * but a mute one, so it stands in only when there is no text to quote.
+   */
+  function fieldError(el) {
+    if (!el) return '';
+
+    const box = el.closest?.('[data-automation-id^="formField"], [class*="field"], [class*="Field"], li, td, .form-group')
+      || el.parentElement;
+
+    if (box) {
+      for (const node of box.querySelectorAll(ERROR_SEL)) {
+        if (node.contains(el)) continue;
+        // A label is describing the field, not complaining about it, and an
+        // element the page is not showing is a message it has already retracted.
+        if (node.tagName === 'LABEL') continue;
+        if (JF.isVisible && !JF.isVisible(node)) continue;
+        const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+        if (text && text.length <= 200 && ERROR_TEXT.test(text)) return text;
+      }
+    }
+
+    if (el.getAttribute?.('aria-invalid') === 'true') return 'flagged invalid';
+    return '';
+  }
+  JF.fieldError = fieldError;
 
   /* -------------------------------------------------------------- text --- */
   /**
@@ -119,26 +191,65 @@
    * landed *after* the real value, blanking it. It also doubled the event traffic,
    * which is most of where the sluggishness came from.
    */
-  async function fillText(el, value, { blur = true } = {}) {
-    const want = String(value);
+  function writeOnce(el, text) {
     focusFirst(el);
-    setNativeValue(el, want);
-    JF.claim(el, want);
-    fireEvents(el, { keys: true });
-    if (blur) commitField(el);
+    resetTracker(el, text);
+    setNativeValue(el, text);
+    fireEvents(el, { keys: true, data: text });
+  }
 
-    // Some frameworks re-render the control between the write and the commit and
-    // hand back an empty box. One retry against the live node fixes it; a second
-    // would just be thrashing.
-    if (String(el.value) !== want) {
-      await sleep(60);
-      focusFirst(el);
-      setNativeValue(el, want);
-      JF.claim(el, want);
-      fireEvents(el, { keys: true });
-      if (blur) commitField(el);
+  /**
+   * Type it in pieces, the way a keyboard would.
+   *
+   * Deliberately the slow path and never the first one: it clears the box before
+   * it starts, and an `input` event carrying an empty string is what makes
+   * re-rendering forms run a validation pass per field. That cost is worth paying
+   * for the handful of controls that reject a single bulk write — masked phone and
+   * date boxes, and any field whose framework diffs the value character by
+   * character — but not for the other fifty on the page.
+   */
+  async function typeInto(el, text) {
+    focusFirst(el);
+    resetTracker(el, '');
+    setNativeValue(el, '');
+    el.dispatchEvent(ev('InputEvent', 'input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+
+    const step = Math.max(1, Math.ceil(text.length / 8));
+    for (let end = step; end < text.length + step; end += step) {
+      const slice = text.slice(0, Math.min(end, text.length));
+      const added = slice.slice(-Math.min(step, slice.length));
+      el.dispatchEvent(ev('KeyboardEvent', 'keydown', { bubbles: true, cancelable: true, key: added.slice(-1) || 'a' }));
+      resetTracker(el, slice);
+      setNativeValue(el, slice);
+      el.dispatchEvent(ev('InputEvent', 'input', { bubbles: true, cancelable: false, inputType: 'insertText', data: added }));
+      el.dispatchEvent(ev('KeyboardEvent', 'keyup', { bubbles: true, cancelable: true, key: added.slice(-1) || 'a' }));
+      await sleep(12);
     }
-    return String(el.value) === want;
+    el.dispatchEvent(ev('Event', 'change', { bubbles: true, cancelable: true }));
+  }
+
+  /**
+   * Write a value and check it survived.
+   *
+   * "Set it and hope" is what produced a form full of visibly-filled boxes that
+   * the ATS still counted as empty. A write that does not stick, or that leaves
+   * the page complaining, is now retried once through the keystroke path before
+   * we report anything back.
+   */
+  async function fillText(el, value, { blur = true, retry = true } = {}) {
+    const text = String(value);
+
+    writeOnce(el, text);
+    JF.claim(el, text);
+    if (blur) commitBlur(el);
+
+    if (String(el.value) === text) return true;
+    if (!retry) return false;
+
+    await typeInto(el, text);
+    JF.claim(el, text);
+    if (blur) commitBlur(el);
+    return String(el.value) === text;
   }
 
   /** contenteditable rich-text areas (Lever's cover-letter box, some Workday notes). */
@@ -149,8 +260,8 @@
     // input event that rich-text editors (Quill, ProseMirror, Draft) will honour.
     const inserted = document.execCommand?.('insertText', false, String(value));
     if (!inserted) el.textContent = String(value);
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: String(value) }));
-    el.dispatchEvent(new Event('blur', { bubbles: true }));
+    el.dispatchEvent(ev('InputEvent', 'input', { bubbles: true, inputType: 'insertText', data: String(value) }));
+    commitBlur(el);
     return true;
   }
 
@@ -284,7 +395,7 @@
       best.el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       best.el.click();
       await sleep(120);
-      el.dispatchEvent(new Event('blur', { bubbles: true }));
+      commitBlur(el);
 
       // Verify rather than assume. A listbox that ignored the click leaves the
       // widget showing whatever was highlighted — usually the first row, which is
@@ -436,6 +547,49 @@
   };
 
   /**
+   * One sweep at the end: re-commit anything the form is still complaining about.
+   *
+   * Validation on these platforms is asynchronous and debounced, so a field can
+   * only be judged a beat after it was written — and waiting that beat per field
+   * would add half a minute to a sixty-field Workday step. Waiting once, after
+   * every write is in, costs a single pause and catches the same failures: values
+   * the framework reverted on re-render, and errors raised by an earlier failed
+   * submit that never cleared because nothing re-validated them.
+   *
+   * A field the user has since typed in is left strictly alone. Repairing our own
+   * work must never mean overwriting theirs.
+   */
+  JF.revalidate = async function revalidate(entries, quirks = {}) {
+    if (!entries?.length) return [];
+    await sleep(Math.min(quirks.slowRender || 250, 600));
+
+    const repaired = [];
+    for (const entry of entries) {
+      const el = entry.selector && document.querySelector(entry.selector);
+      if (!el || !('value' in el)) continue;
+
+      const want = String(entry.value ?? '');
+      if (!want) continue;
+      if (JF.isUserOccupied(el)) continue;
+
+      const stuck = String(el.value) === want;
+      const complaint = fieldError(el);
+      if (stuck && !complaint) continue;
+
+      await typeInto(el, want);
+      JF.claim(el, want);
+      commitBlur(el);
+      await sleep(80);
+
+      if (String(el.value) === want && !fieldError(el)) {
+        repaired.push(entry.label || entry.selector);
+        JF.markFilled(el, entry);
+      }
+    }
+    return repaired;
+  };
+
+  /**
    * The carbon-copy trace: a filled field gets a ballpoint-blue rule, and anything
    * flagged for review gets the pink one. This is the whole visual feedback system —
    * the user should be able to see at a glance which answers they need to check.
@@ -469,69 +623,9 @@
   document.addEventListener('keydown', markUserEdited, true);
   document.addEventListener('paste', markUserEdited, true);
 
-  const ERROR_RE = /required|invalid|must have|cannot be|not valid|enter a/i;
-  const ERROR_SEL = [
-    '[data-automation-id="errorMessage"]',
-    '[data-automation-id*="rror"]',
-    '[role="alert"]',
-    '.error-message', '[class*="errorMessage"]', '[class*="ErrorMessage"]',
-  ].join(', ');
-
-  /**
-   * Did the page reject what we put in this field?
-   *
-   * Checked after the whole pass rather than per write, because a form validates
-   * on submit or on blur of a later field — the error for First Name appears long
-   * after First Name was filled.
-   */
-  JF.fieldError = function fieldError(el) {
-    if (!el) return null;
-    const invalid = el.getAttribute('aria-invalid') === 'true';
-
-    // Prefer the form's own wording — "The field First Name is required and must
-    // have a value" tells the user what to do; "the form rejected this" does not.
-    const described = el.getAttribute('aria-describedby');
-    if (described) {
-      for (const id of described.split(/\s+/)) {
-        const node = document.getElementById(id);
-        const text = node?.textContent?.trim();
-        if (text && (invalid || ERROR_RE.test(text))) return text.slice(0, 160);
-      }
-    }
-
-    // Otherwise look inside this field's own wrapper, never the whole form —
-    // an unrelated error elsewhere on the page is not this field's problem.
-    let box = el.closest('[data-automation-id^="formField"]') || el.parentElement;
-    for (let depth = 0; depth < 3 && box; depth++, box = box.parentElement) {
-      if (box.querySelectorAll('input, select, textarea').length > 2) break;
-      const err = box.querySelector(ERROR_SEL);
-      if (err && JF.isVisible(err) && err.textContent.trim()) {
-        return err.textContent.trim().slice(0, 160);
-      }
-    }
-
-    return invalid ? 'The form rejected this value' : null;
-  };
-
-  /** Write it again, harder, for a field the page says is still empty. */
-  JF.repairField = async function repairField(el, value) {
-    if (!el) return false;
-    focusFirst(el);
-    await sleep(40);
-    setNativeValue(el, '');
-    fireEvents(el);
-    await sleep(40);
-    setNativeValue(el, String(value));
-    JF.claim(el, String(value));
-    fireEvents(el, { keys: true });
-    await sleep(40);
-    commitField(el);
-    await sleep(120);
-    return !JF.fieldError(el) && String(el.value) === String(value);
-  };
-
-  JF.commitField = commitField;
   JF.sleep = sleep;
   JF.setNativeValue = setNativeValue;
   JF.fireEvents = fireEvents;
+  JF.commitBlur = commitBlur;
+  JF.typeInto = typeInto;
 })();

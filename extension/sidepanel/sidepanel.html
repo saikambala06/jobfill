@@ -85,7 +85,15 @@
     <button class="btn primary big" id="fill">
       <span class="btn-label">Fill this application</span>
     </button>
-    <button class="btn ghost big done" id="done" title="Mark this application finished">Done</button>
+    <button class="btn ghost big icon-only" id="refresh"
+            title="Finished here? Record it and load the next step"
+            aria-label="Finished here? Record it and load the next step">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1" />
+        <polyline points="20.5 4 20.5 10 14.5 10" />
+      </svg>
+    </button>
   </div>
   <p id="fill-note" class="note" hidden></p>
 
@@ -127,13 +135,14 @@
 
 </section>
 
-<!-- Done → confirm → advance. A native confirm() closes the side panel on some
-     builds, so the dialog lives inside it. -->
+<!-- Refresh → confirm → record → read the new step. A native confirm() closes the
+     side panel on some builds, so the dialog lives inside it. -->
 <div class="scrim" id="scrim" hidden>
   <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
     <div id="dlg-ask">
       <h2 id="dlg-title">Did you fill in all the forms?</h2>
-      <p>This counts the application as completed and moves on to the next step.</p>
+      <p>This counts the application as completed, then reads whatever is on the page now.
+         Choosing “Not yet” changes nothing.</p>
       <div class="dialog-actions">
         <button class="btn ghost" id="dlg-cancel">Not yet</button>
         <button class="btn primary" id="dlg-ok">Yes, I'm done</button>

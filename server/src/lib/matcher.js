@@ -306,42 +306,14 @@ export function matchField(field) {
 /* --------------------------------------------------------- profile reads -- */
 const PROFILE_GROUPS = ['identity', 'location', 'links', 'professional', 'compensation', 'eligibility', 'demographics', 'preferences', 'application'];
 
-/**
- * Trailing "City, ST 12345" that a résumé parser folded into the street line.
- *
- * Two passes. The first strips the parts the profile already knows, which is exact
- * and safe. The second is for profiles that only ever captured one address blob
- * and have no city or postcode of their own to match against — without it those
- * users still get the whole address in Address Line 1 and the form rejects it.
- */
+/** Trailing "City, ST 12345" that a résumé parser folded into the street line. */
 function streetOnly(line, loc = {}) {
   let out = String(line);
-
   for (const part of [loc.postalCode, loc.country, loc.state, loc.city]) {
     if (!part) continue;
     const esc = String(part).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     out = out.replace(new RegExp(`[,\\s]*\\b${esc}\\b[,\\s]*$`, 'i'), '');
   }
-  out = out.replace(/[\s,]+$/, '').trim();
-
-  // A trailing city name is only safe to remove once something has confirmed this
-  // really is a whole address — a postcode or a state code at the end. Without
-  // that anchor "Flat 3, Heritage Trail" would lose its street name, so an
-  // unanchored line is left exactly as the user wrote it.
-  if (out.includes(',')) {
-    const before = out;
-    let anchored = false;
-
-    const noPostcode = out.replace(/,\s*(\d{5}(-\d{4})?|[A-Z]\d[A-Z]\s?\d[A-Z]\d|\d{6})\s*$/i, '');
-    if (noPostcode !== out) { anchored = true; out = noPostcode; }
-
-    const noState = out.replace(/,\s*[A-Z]{2}\s*$/, '');
-    if (noState !== out) { anchored = true; out = noState; }
-
-    if (anchored) out = out.replace(/,\s*[A-Za-z .'-]{2,30}\s*$/, '');
-    if (out.trim().length < 4) out = before;
-  }
-
   return out.replace(/[\s,]+$/, '').trim() || String(line);
 }
 

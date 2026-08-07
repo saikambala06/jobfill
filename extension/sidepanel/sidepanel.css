@@ -136,10 +136,24 @@ body.sidepanel .masthead {
 .toggle-text strong { display: block; font-size: 12.5px; font-weight: 600; }
 .toggle-text .hint { margin-top: 2px; }
 
-/* ── Fill + Done ─────────────────────────────────────────────────────────── */
+/* ── Fill + refresh ──────────────────────────────────────────────────────── */
 .action-pair { display: flex; gap: 8px; margin: 0 16px; }
 .action-pair #fill { flex: 1; margin: 0; }
-.action-pair .done { flex: none; width: auto; padding: 0 14px; }
+
+/* Square, so it reads as an icon control rather than a truncated button. */
+.action-pair .icon-only {
+  flex: none;
+  width: 42px; padding: 0;
+  display: grid; place-items: center;
+}
+.action-pair .icon-only svg { display: block; }
+.action-pair .icon-only:disabled { opacity: .45; cursor: default; }
+
+/* Spins only while the work is actually running, so the icon is a status light
+   as well as a button. */
+.action-pair .icon-only.spinning svg { animation: spin .9s linear infinite; transform-origin: 50% 50%; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .action-pair .icon-only.spinning svg { animation: none; } }
 
 /* ── account menu ────────────────────────────────────────────────────────── */
 .account { position: relative; flex: none; }
@@ -238,21 +252,3 @@ body.sidepanel .masthead {
 }
 @media (prefers-reduced-motion: reduce) { .loader i { animation: none; opacity: .7; } }
 #dlg-busy p { text-align: center; margin-top: 10px; }
-
-/* Waiting for the user to press "Save and Continue" on the form itself. */
-#fill.armed {
-  background: transparent;
-  border: 1px dashed var(--blue);
-  color: var(--blue);
-}
-#fill.armed::after {
-  content: '';
-  display: inline-block;
-  width: 5px; height: 5px;
-  margin-left: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: pulse 1.4s ease-in-out infinite;
-}
-@keyframes pulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { #fill.armed::after { animation: none; } }

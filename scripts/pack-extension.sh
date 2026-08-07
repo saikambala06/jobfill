@@ -34,7 +34,7 @@ node -e '
   const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   if (!m.side_panel?.default_path) throw new Error("manifest is missing side_panel");
   if (!m.permissions.includes("sidePanel")) throw new Error("manifest is missing the sidePanel permission");
-  if (m.action?.default_popup) throw new Error("default_popup would stop the icon click reaching us");
+  if (m.action?.default_popup) throw new Error("default_popup would stop the side panel opening on click");
   console.log("side panel wiring verified");
 ' "$STAGE/manifest.json"
 

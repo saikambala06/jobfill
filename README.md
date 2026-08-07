@@ -27,19 +27,17 @@ single function on the same domain. See [DEPLOY.md](DEPLOY.md).
 ## Where JobFill lives
 
 The extension opens as a **side panel** docked beside the application, not as a
-popup. The toolbar icon toggles it: click to open, click again to close. Closing
-ends the panel, so the next click starts fresh on whatever application you are
-looking at. While open it stays put through every step of the form — Workday's six
-pages, LinkedIn Easy Apply's wizard — showing what it filled and what to check.
+popup. Click the toolbar icon and it stays open through every step of the form —
+Workday's six pages, LinkedIn Easy Apply's wizard — showing what it filled and
+what you should check, while you work in the page next to it.
 
 Nothing is written to a form until you press **Fill this application**. Watching
 for new steps and filling them unprompted is available under *Fill new steps
 automatically*, and is off until you turn it on.
 
 **Done** sits next to Fill. It asks whether you finished the forms, records the
-application as completed, and then waits: the next step of the form fills itself
-as soon as you press the form's own *Save and Continue*. A six-page Workday
-application is one row in the dashboard, not six.
+application as completed, then looks for the next step and fills it — so a
+six-page Workday application is one row in the dashboard, not six.
 
 Before signing in for the first time, open the extension from `chrome://extensions`
 and it renders as a centred setup card where you can point it at your API.

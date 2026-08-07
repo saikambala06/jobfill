@@ -13,10 +13,64 @@
 
 const $ = (id) => document.getElementById(id);
 const send = (type, payload) => chrome.runtime.sendMessage({ type, payload });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let mode = 'login';
 let formTab = null;
 let rows = [];
+
+/* ------------------------------------------------------- toolbar toggle -- */
+/**
+ * A live port to the service worker, which is how the toolbar icon knows whether
+ * the panel is already open. There is no API to ask Chrome that, so the panel
+ * answers it by existing: the port is held for exactly as long as the panel is on
+ * screen, and the worker treats its disconnect as the close.
+ *
+ * The worker replies with whether this open should start clean — the third click
+ * of the open → close → open-fresh cycle.
+ */
+let port = null;
+let resolveBoot;
+const bootState = new Promise((resolve) => { resolveBoot = resolve; });
+
+function connect(windowId) {
+  try {
+    port = chrome.runtime.connect({ name: 'jobfill-panel' });
+    port.postMessage({ type: 'PANEL_HELLO', windowId });
+  } catch {
+    // The extension was reloaded or updated underneath us. Nothing to reconnect
+    // to, and retrying forever would just spin.
+    port = null;
+    resolveBoot({ fresh: false });
+    return;
+  }
+
+  port.onMessage.addListener((msg) => {
+    if (msg?.type === 'PANEL_BOOT') resolveBoot({ fresh: Boolean(msg.fresh) });
+    // Second click on the toolbar icon. Closing ourselves is cleaner than any
+    // workaround from the worker's side, which can only disable the panel and
+    // hope.
+    if (msg?.type === 'PANEL_CLOSE') window.close();
+  });
+
+  // A recycled worker must not be mistaken for a closed panel, or the next click
+  // would open a second one instead of closing this.
+  port.onDisconnect.addListener(() => { port = null; setTimeout(() => connect(windowId), 300); });
+}
+
+/**
+ * Say goodbye properly.
+ *
+ * The worker cannot tell a panel that closed from a port that dropped under a
+ * recycled worker, and guessing wrong in either direction is bad: guess "closed"
+ * and a reconnecting panel wipes its own results mid-application; guess "alive"
+ * and closing with Chrome's own X leaves the next open showing the last posting.
+ * `pagehide` only fires when this document is genuinely going away, so it is the
+ * one signal that means it.
+ */
+window.addEventListener('pagehide', () => {
+  try { port?.postMessage({ type: 'PANEL_CLOSING' }); } catch { /* already gone */ }
+});
 
 /* ---------------------------------------------------------------- boot -- */
 async function currentTab() {
@@ -24,31 +78,40 @@ async function currentTab() {
   return tab && /^https?:/.test(tab.url || '') ? tab : null;
 }
 
-/**
- * Stay connected to the service worker for as long as this panel is on screen.
- *
- * The port is how the toolbar icon knows the panel is already open, so the next
- * click can close it instead of doing nothing. Closing is this document ending
- * itself — which is also why every open is a fresh start rather than a resumption.
- */
-function connectToggle() {
-  const port = chrome.runtime.connect({ name: 'jobfill-sidepanel' });
-  chrome.windows.getCurrent().then((w) => port.postMessage({ type: 'REGISTER', windowId: w.id })).catch(() => {});
-  port.onMessage.addListener((msg) => { if (msg?.type === 'CLOSE') window.close(); });
-  // If the worker is torn down mid-session, reconnect so the toggle keeps working.
-  port.onDisconnect.addListener(() => setTimeout(connectToggle, 400));
-}
-connectToggle();
-
 (async function boot() {
+  const win = await chrome.windows.getCurrent().catch(() => null);
+  connect(win?.id ?? chrome.windows?.WINDOW_ID_CURRENT ?? -2);
+
   formTab = await currentTab();
 
   const { apiBase } = await chrome.storage.local.get('apiBase');
   $('api-base').value = apiBase || '';
 
+  // Don't hang the panel on the worker: if the reply is slow, boot as a resume.
+  const state = await Promise.race([bootState, sleep(700).then(() => ({ fresh: false }))]);
+
   const { token } = await chrome.storage.local.get('token');
-  if (token) showMain(); else showAuth();
+  if (token) showMain({ fresh: state.fresh }); else showAuth();
 })();
+
+/**
+ * Reopening after a deliberate close means a new application, not a resumed one.
+ * Anything describing the last page — the trace, the notes, the content script's
+ * memory of what it planned — is discarded before the first scan, so nothing from
+ * the previous posting can be read as belonging to this one.
+ *
+ * The page itself is deliberately left alone. Reloading it would take the user's
+ * half-typed answers with it, which is a far worse outcome than a stale panel.
+ */
+async function startFresh() {
+  clearResults();
+  $('fill-note').hidden = true;
+  $('detect').className = 'detect';
+  $('detect-ats').textContent = 'Scanning…';
+  $('detect-count').textContent = '—';
+  $('detect-role').textContent = '—';
+  await send('RESET_SESSION', { tabId: formTab?.id }).catch(() => {});
+}
 
 // The panel outlives the page it was opened on, so it follows the user around.
 chrome.tabs.onActivated.addListener(async () => { formTab = await currentTab(); refreshPage(); });
@@ -71,9 +134,11 @@ function showAuth() {
   $('email').focus();
 }
 
-async function showMain() {
+async function showMain({ fresh = false } = {}) {
   $('auth').hidden = true;
   $('main').hidden = false;
+
+  if (fresh) await startFresh();
 
   const { user, autoFillNewSteps } = await chrome.storage.local.get(['user', 'autoFillNewSteps']);
   const name = user?.name || 'Your profile';
@@ -156,28 +221,40 @@ $('menu-settings').onclick = () => { closeMenu(); openDashboard('/settings'); };
 $('logout').onclick = async () => { closeMenu(); await send('LOGOUT'); clearResults(); showAuth(); };
 
 /* ---------------------------------------------------------- page scan -- */
+/** Paint the detect box from a scan result. One place, so every path agrees. */
+function applyDetection(data) {
+  const found = Number(data?.count) > 0;
+  $('detect').className = found ? 'detect found' : 'detect none';
+  $('detect-ats').textContent = found ? data.ats : (data?.ats || 'No form on this page');
+  $('detect-count').textContent = `${data?.count ?? 0} detected`;
+  $('detect-role').textContent = data?.page?.role || data?.page?.company || '—';
+  $('fill').disabled = !found;
+  return found;
+}
+
+/**
+ * Read the page.
+ *
+ * Two routes on purpose. Talking to the tab directly is the fast one, but a
+ * step change on a single-page ATS can leave the tab without a listener — and
+ * the old code read that silence as "not available here", so the panel gave up
+ * on a page that was perfectly fillable. The worker can inject the content
+ * script and ask again, so a failure of the first route is a reason to take the
+ * second, not a reason to stop.
+ */
 async function scanPage() {
-  const box = $('detect');
   try {
+    if (!formTab) formTab = await currentTab();
     if (!formTab) throw new Error('no page');
-    const res = await chrome.tabs.sendMessage(formTab.id, { type: 'SCAN_ONLY', payload: { force: true } });
-    if (res?.ok && res.data.count > 0) {
-      box.className = 'detect found';
-      $('detect-ats').textContent = res.data.ats;
-      $('detect-count').textContent = `${res.data.count} detected`;
-      $('detect-role').textContent = res.data.page?.role || res.data.page?.company || '—';
-      $('fill').disabled = false;
-      return res.data;
-    }
-    box.className = 'detect none';
-    $('detect-ats').textContent = res?.data?.ats || 'No form on this page';
-    $('detect-count').textContent = '0 detected';
-    $('detect-role').textContent = '—';
-    $('fill').disabled = true;
-    return null;
+    const res = await chrome.tabs.sendMessage(formTab.id, { type: 'SCAN_ONLY' });
+    if (res?.ok) { applyDetection(res.data); return res.data; }
+    throw new Error('no answer');
   } catch {
-    // No content script here — a chrome:// page, or a tab opened before install.
-    box.className = 'detect none';
+    const res = await send('RESCAN_TAB', { tabId: formTab?.id }).catch(() => null);
+    if (res?.ok) { applyDetection(res.data); return res.data; }
+
+    // Genuinely nothing to talk to: a chrome:// page, or a tab that pre-dates install.
+    $('detect').className = 'detect none';
     $('detect-ats').textContent = 'Not available here';
     $('detect-count').textContent = '—';
     $('detect-role').textContent = 'Reload the page and try again';
@@ -286,70 +363,131 @@ $('auto-steps').onchange = async (e) => {
   await chrome.storage.local.set({ autoFillNewSteps: e.target.checked });
 };
 
-/* ----------------------------------------------------------- done ------ */
+/* --------------------------------------------------------- refresh ----- */
 const dialog = {
   open() { $('scrim').hidden = false; $('dlg-ask').hidden = false; $('dlg-busy').hidden = true; $('dlg-ok').focus(); },
   busy(text) { $('dlg-ask').hidden = true; $('dlg-busy').hidden = false; $('dlg-busy-text').textContent = text; },
-  close() { $('scrim').hidden = true; },
+  close() { $('scrim').hidden = true; $('dlg-ask').hidden = false; $('dlg-busy').hidden = true; },
 };
 
-$('done').onclick = () => dialog.open();
-$('dlg-cancel').onclick = () => dialog.close();
-$('scrim').onclick = (e) => { if (e.target === $('scrim')) dialog.close(); };
+let finishing = false;
+
+$('refresh').onclick = () => { if (!finishing) dialog.open(); };
+
+// "Not yet" is a pure escape hatch: it closes the dialog and touches nothing —
+// no recording, no re-scan, no clearing of the trace already on screen.
+$('dlg-cancel').onclick = () => { if (!finishing) dialog.close(); };
+$('scrim').onclick = (e) => { if (e.target === $('scrim') && !finishing) dialog.close(); };
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('scrim').hidden && !finishing) dialog.close();
+});
 
 /**
- * Finish the application, then carry straight on to whatever comes next.
+ * Never let a promise hold the dialog open.
  *
- * Multi-page applications are the norm, so "done with this page" almost always
- * means "now do the next one". Recording the completion and then filling the next
- * step in the same gesture is the difference between a tool you drive and a tool
- * you supervise.
+ * The spinner used to be the last thing some users saw: an unreachable API or a
+ * tab that stopped answering left `await` pending forever, and because the close
+ * came after it, the dialog stayed up with its dots bouncing over stale numbers.
+ * Every wait in this flow is now bounded and resolves to something the caller can
+ * act on.
  */
-/**
- * Armed by Done, disarmed by the next fill.
- *
- * The old version sat in the dialog polling for six seconds and then gave up,
- * which was always going to be wrong: the next step does not appear until the
- * *user* presses "Save and Continue", and they cannot do that while a modal is
- * covering the panel. Pressing Done is consent for the next step to fill itself
- * whenever it turns up, so the dialog closes straight away and the step watcher
- * does the rest.
- */
-let armedForNextStep = false;
-
-$('dlg-ok').onclick = async () => {
-  dialog.busy('Recording this application…');
-
-  const res = await send('COMPLETE_APPLICATION', { url: formTab?.url, title: formTab?.title });
-  if (!res?.ok) {
-    dialog.close();
-    showNote(res?.error || 'Could not record the application.', true);
-    return;
-  }
-
-  await loadStats();
-  await new Promise((r) => setTimeout(r, 450));   // let the tick land before it vanishes
-  dialog.close();
-
-  armedForNextStep = true;
-  setArmedUI(true);
-  showNote(`Recorded — ${res.data.completed} completed. Continue in the form and the next step will fill itself.`);
-
-  // If the form has already moved on, do not wait for a change that has happened.
-  const now = await scanPage();
-  if (now?.unfilled > 0) fillNextStep();
-};
-
-function setArmedUI(on) {
-  $('fill').querySelector('.btn-label').textContent = on ? 'Waiting for the next step' : 'Fill this application';
-  $('fill').classList.toggle('armed', on);
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    Promise.resolve(promise).catch((err) => ({ ok: false, error: err?.message })),
+    sleep(ms).then(() => fallback),
+  ]);
 }
 
-function fillNextStep() {
-  if (!armedForNextStep) return;
-  armedForNextStep = false;
-  setArmedUI(false);
-  $('fill').click();
+/**
+ * Finish the application, then read the page again from scratch.
+ *
+ * Multi-page applications are the norm, so "done here" almost always means "now
+ * show me what is next". The three states the user sees — recording, looking,
+ * loading — are real stages, and the panel is repainted from a fresh scan at the
+ * end of them whether or not a next step turned up. That last part is the fix:
+ * previously a page with nothing new left the old step's field counts on screen,
+ * so the panel described a form the user had already left.
+ */
+$('dlg-ok').onclick = async () => {
+  if (finishing) return;
+  finishing = true;
+  $('dlg-ok').disabled = true;
+  $('dlg-cancel').disabled = true;
+  $('refresh').classList.add('spinning');
+  $('refresh').disabled = true;
+
+  let note = null;
+  let warn = false;
+
+  try {
+    dialog.busy('Recording this application…');
+    formTab = (await currentTab()) || formTab;
+
+    const res = await withTimeout(
+      send('COMPLETE_APPLICATION', { url: formTab?.url, title: formTab?.title }),
+      12000,
+      { ok: false, error: 'The server did not answer in time. Nothing was recorded.' },
+    );
+
+    if (!res?.ok) {
+      note = res?.error || 'Could not record the application.';
+      warn = true;
+      return;
+    }
+
+    dialog.busy('Looking for the next step…');
+    const next = await waitForNextStep();
+
+    // Whatever the answer, the panel now describes the page as it is right now.
+    dialog.busy('Loading the new fields…');
+    clearResults();
+    const seen = next || await scanPage();
+    if (next) applyDetection(next);
+    await loadStats();
+
+    if (seen && Number(seen.count) > 0 && Number(seen.unfilled) > 0) {
+      note = 'Application recorded — filling the next step now.';
+      // Queued behind the dialog close so the user sees the trace, not the scrim.
+      setTimeout(() => $('fill').click(), 0);
+    } else {
+      note = `Application recorded. You have completed ${res.data?.completed ?? 0}.`;
+    }
+  } catch (err) {
+    note = err?.message || 'Something went wrong finishing up.';
+    warn = true;
+  } finally {
+    // The close lives here so no failure above can strand the spinner.
+    dialog.close();
+    finishing = false;
+    $('dlg-ok').disabled = false;
+    $('dlg-cancel').disabled = false;
+    $('refresh').classList.remove('spinning');
+    $('refresh').disabled = false;
+    if (note) showNote(note, warn);
+  }
+};
+
+/**
+ * Poll for a step with unfilled questions on it.
+ *
+ * Routed through the worker rather than straight at the tab: a Workday step
+ * change can replace the document and take the content script's listener with
+ * it, and the worker will re-inject before asking. The old direct call simply
+ * threw into an empty catch on every attempt, so the loop always ran its full
+ * length and always concluded there was nothing next.
+ */
+async function waitForNextStep(timeoutMs = 9000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+
+  while (Date.now() < deadline) {
+    await sleep(600);
+    const res = await send('RESCAN_TAB', { tabId: formTab?.id }).catch(() => null);
+    if (!res?.ok) continue;
+    last = res.data;
+    if (Number(last.count) > 0 && Number(last.unfilled) > 0) return last;
+  }
+  return null;
 }
 
 function showNote(text, warn = false) {
@@ -432,13 +570,14 @@ chrome.runtime.onMessage.addListener((msg) => {
 
   if (p.phase === 'done') {
     resetFillButton();
-    if (p.repaired) $('m-review').textContent = String(Number($('m-review').textContent || 0));
     $('trace-bar').style.width = '100%';
     $('m-detected').textContent = p.detected ?? '—';
     if (p.warning) {
-      $('fill-note').textContent = p.warning;
-      $('fill-note').className = 'note warn';
-      $('fill-note').hidden = false;
+      showNote(p.warning, true);
+    } else if (p.repaired) {
+      // Worth saying out loud: these are fields the form rejected on the first
+      // write and accepted on the second, which is otherwise invisible.
+      showNote(`${p.repaired} field${p.repaired === 1 ? '' : 's'} needed a second pass before the form accepted ${p.repaired === 1 ? 'it' : 'them'}.`);
     }
     loadStats();
     return;
@@ -464,13 +603,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     $('detect-count').textContent = `${p.detected} detected`;
     $('detect-role').textContent = p.role || '—';
     $('fill').disabled = !p.detected;
-    if (!armedForNextStep) $('fill-note').hidden = true;
-
-    // This is the step Done was waiting for.
-    if (armedForNextStep && p.unfilled > 0) {
-      showNote('New step — filling it now.');
-      fillNextStep();
-    }
+    $('fill-note').hidden = true;
     return;
   }
 

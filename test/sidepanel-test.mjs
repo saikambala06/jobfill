@@ -10,6 +10,7 @@ const js = fs.readFileSync(`${EXT}/sidepanel/sidepanel.js`, 'utf8');
 const css = fs.readFileSync(`${EXT}/sidepanel/sidepanel.css`, 'utf8');
 const popupCss = fs.readFileSync(`${EXT}/popup/popup.css`, 'utf8');
 const manifest = JSON.parse(fs.readFileSync(`${EXT}/manifest.json`, 'utf8'));
+const content = fs.readFileSync(`${EXT}/content/index.js`, 'utf8');
 
 const doc = new JSDOM(html).window.document;
 
@@ -27,16 +28,11 @@ t('no default_popup to suppress the click', !manifest.action?.default_popup);
 t('the file it points at exists', fs.existsSync(`${EXT}/${manifest.side_panel.default_path}`));
 
 const sw = fs.readFileSync(`${EXT}/background/service-worker.js`, 'utf8');
-// Chrome has no sidePanel.close(), so letting it handle the click gives
-// open-only behaviour. We take the click and toggle it ourselves.
-t('Chrome does not auto-open (we toggle)', /setPanelBehavior\(\s*\{\s*openPanelOnActionClick:\s*false/.test(sw));
-t('the icon click is handled here', /chrome\.action\.onClicked\.addListener/.test(sw));
-t('the worker tracks which panels are open', /openPanels/.test(sw));
-t('a second click asks the panel to close', /postMessage\(\{\s*type:\s*'CLOSE'/.test(sw));
-t('a first click opens it', /sidePanel\.open\(/.test(sw));
-t('the panel holds a port open while it lives', /connect\(\{\s*name:\s*'jobfill-sidepanel'/.test(js));
-t('and closes itself when told', /type === 'CLOSE'[\s\S]{0,40}window\.close\(\)/.test(js));
-t('closing ends the document, so reopening starts fresh', /window\.close\(\)/.test(js));
+/* The click is ours to handle now: Chrome's built-in open-on-click can only ever
+   open, and the icon has to cycle open → closed → open-fresh. */
+t('Chrome does not handle the click itself',
+  /setPanelBehavior\(\s*\{\s*openPanelOnActionClick:\s*false/.test(sw));
+t('we handle it instead', /chrome\.action\.onClicked\.addListener/.test(sw));
 
 /* ------------------------------------------------------- every id exists -- */
 console.log('\n── every id the script reaches for is in the markup ─────');
@@ -60,21 +56,57 @@ for (const cls of ['action-pair', 'avatar', 'menu', 'scrim', 'dialog', 'loader',
 t('the panel loads the shared popup stylesheet', html.includes('../popup/popup.css'));
 t('the standalone setup layout exists', popupCss.includes('body.standalone'));
 
+/* --------------------------------------------- the toolbar icon cycles -- */
+console.log('\n── open → close → open fresh ───────────────────────────');
+t('the panel holds a port so the worker knows it is open',
+  /chrome\.runtime\.connect\(\{\s*name:\s*'jobfill-panel'/.test(js));
+t('the worker listens for it', /port\.name !== 'jobfill-panel'/.test(sw));
+t('a click while open asks the panel to close',
+  /panelPorts\.has\(windowId\)[\s\S]{0,400}PANEL_CLOSE/.test(sw));
+t('and the panel does close itself', /PANEL_CLOSE'\)\s*window\.close\(\)/.test(js));
+t('closing marks the next open as a fresh one', /freshOnOpen\.add\(windowId\)/.test(sw));
+t('closing with Chrome\'s own X counts too',
+  /pagehide[\s\S]{0,200}PANEL_CLOSING/.test(js) && /PANEL_CLOSING'\)/.test(sw));
+t('which the panel is told about on boot', /PANEL_BOOT/.test(js) && /PANEL_BOOT/.test(sw));
+t('a fresh open clears the last application', /startFresh/.test(js));
+t('and tells the page to forget its plan too', /RESET_SESSION/.test(js));
+t('the content script honours that', /msg\.type === 'RESET_SESSION'/.test(content));
+t('a recycled worker is not mistaken for a closed panel',
+  /onDisconnect[\s\S]{0,200}connect\(windowId\)/.test(js));
+t('there is a fallback for a panel that will not close', /forceClose/.test(sw));
+
 /* ------------------------------------------------- the new controls work -- */
-console.log('\n── this round\'s additions ──────────────────────────────');
-t('Done sits beside Fill', Boolean(doc.querySelector('.action-pair #fill')) && Boolean(doc.querySelector('.action-pair #done')));
+console.log('\n── refresh replaces Done ───────────────────────────────');
+t('a refresh button sits beside Fill',
+  Boolean(doc.querySelector('.action-pair #fill')) && Boolean(doc.querySelector('.action-pair #refresh')));
+t('the Done button is gone', !doc.getElementById('done'));
+t('it is an icon, not a word', Boolean(doc.querySelector('#refresh svg')));
+t('and still names itself for screen readers',
+  Boolean(doc.getElementById('refresh')?.getAttribute('aria-label')));
+
 t('the confirm dialog asks before counting',
   /did you fill in all the forms/i.test(doc.getElementById('dlg-title')?.textContent || ''),
   doc.getElementById('dlg-title')?.textContent);
 t('it starts hidden', doc.getElementById('scrim')?.hasAttribute('hidden'));
 t('there is a loading state', Boolean(doc.querySelector('#dlg-busy .loader')));
+t('"Not yet" only closes the dialog',
+  /\$\('dlg-cancel'\)\.onclick = \(\) => \{ if \(!finishing\) dialog\.close\(\); \};/.test(js));
 t('confirming records the application', js.includes('COMPLETE_APPLICATION'));
-t('the dialog closes rather than blocking the form', /dialog\.close\(\)[\s\S]{0,120}armedForNextStep = true/.test(js));
-t('and arms the next step instead of polling', js.includes('armedForNextStep'));
-t('"Not yet" only closes the dialog', /\$\('dlg-cancel'\)\.onclick = \(\) => dialog\.close\(\);/.test(js));
-t('and clears nothing', !/dlg-cancel[\s\S]{0,80}clearResults/.test(js));
-t('a new step fills itself once armed', /armedForNextStep && p\.unfilled > 0[\s\S]{0,120}fillNextStep\(\)/.test(js));
-t('the armed state is visible on the button', css.includes('#fill.armed'));
+t('and then looks for the next step', js.includes('waitForNextStep'));
+t('then reloads the fields from the page', /Loading the new fields/.test(js));
+t('and fills the next step when there is one',
+  /waitForNextStep[\s\S]{0,900}\$\('fill'\)\.click\(\)/.test(js));
+
+/* --------------------------------------------- the spinner always ends -- */
+console.log('\n── the dialog cannot get stuck ─────────────────────────');
+t('the network wait is bounded', /withTimeout\(/.test(js));
+t('the step wait is bounded', /Date\.now\(\) < deadline/.test(js));
+t('the close runs in a finally', /finally \{[\s\S]{0,400}dialog\.close\(\)/.test(js));
+t('a re-entrant click cannot stack two runs', /if \(finishing\) return;/.test(js));
+t('polling goes through the worker so a dead tab is re-injected',
+  /send\('RESCAN_TAB'/.test(js) && /RESCAN_TAB:/.test(sw));
+t('and the scan falls back the same way',
+  /scanPage[\s\S]{0,700}send\('RESCAN_TAB'/.test(js));
 
 t('the account button opens a menu', doc.getElementById('account-btn')?.getAttribute('aria-haspopup') === 'menu');
 t('sign out lives inside that menu', Boolean(doc.querySelector('#account-menu #logout')));
@@ -83,7 +115,6 @@ t('the menu closes on an outside click', /closest\('\.account'\)/.test(js));
 t('and on Escape', /key === 'Escape'/.test(js));
 
 t('the panel follows single-page step changes', js.includes("p.phase === 'page'"));
-const content = fs.readFileSync(`${EXT}/content/index.js`, 'utf8');
 t('the content script watches history for them', /window\.history\[method\]\s*=\s*function patched/.test(content));
 t('and polls for steps that do not change the URL', /window\.setInterval\([\s\S]{0,120}?debounced\(\)/.test(content));
 

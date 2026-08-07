@@ -77,7 +77,6 @@
       tellPanel({
         phase: 'page',
         detected: now.fields.length,
-        unfilled: now.fields.filter((f) => !f.prefilled).length,
         ats: now.adapter.name,
         role: now.page.role || now.page.company || '',
         url: location.href,
@@ -164,8 +163,8 @@
     }
 
     const results = [];
-    // Text and date fields are the ones a form validates against its own model;
-    // the sweep at the end re-checks these and nothing else.
+    // Text-shaped controls are the ones an ATS can silently reject, so they are
+    // the ones worth checking again once every write is in.
     const written = [];
     for (let i = 0; i < fills.length; i++) {
       const fill = fills[i];
@@ -177,8 +176,15 @@
         quirks: detection.adapter.quirks,
       });
       results.push(result);
-      if (result.ok && ['text', 'textarea', 'date', 'number'].includes(field.control)) {
-        written.push({ fill, field });
+
+      if (result.ok && ['text', 'textarea', 'date', 'richtext'].includes(field.control)) {
+        written.push({
+          selector: field.selector,
+          value: fill.value,
+          label: field.label,
+          needsReview: fill.needsReview,
+          via: fill.via,
+        });
       }
 
       const row = {
@@ -206,48 +212,29 @@
       if (needsBeat) await JF.sleep(detection.adapter.quirks?.slowRender ? 90 : 35);
     }
 
-    // ---- validation sweep -------------------------------------------------
-    // The form has now seen every value and had a chance to complain. Anything it
-    // rejected gets one more attempt with focus moved properly, which is what
-    // Workday needs before it will accept a value into its own model.
-    const repaired = [];
-    const stillWrong = [];
-    if (written.length) await JF.sleep(detection.adapter.quirks?.slowRender ? 450 : 200);
-    for (const { fill, field } of written) {
-      const el = document.querySelector(field.selector);
-      const err = el && JF.fieldError(el);
-      if (!err) continue;
-
-      const ok = await JF.repairField(el, fill.value);
-      const entry = { label: field.label || fill.label, error: err };
-      (ok ? repaired : stillWrong).push(entry);
-      tellPanel({
-        phase: 'row',
-        row: {
-          uid: `${fill.uid}:repair`,
-          ok,
-          label: field.label || fill.label,
-          value: ok ? String(fill.value) : err,
-          via: 'repair',
-          needsReview: !ok,
-        },
-      });
-    }
-    if (repaired.length) console.info(`[jobfill] repaired ${repaired.length} field(s) the form had rejected`);
+    // Give the form its beat to validate, then fix whatever it rejected. Without
+    // this a Workday step could finish looking complete and still refuse to
+    // advance, every required box flagged under a value the user could plainly see.
+    const repaired = await JF.revalidate(written, detection.adapter.quirks);
 
     const filled = results.filter((r) => r.ok).length;
+    const stillFlagged = written.filter((w) => {
+      const el = document.querySelector(w.selector);
+      return el && JF.fieldError(el);
+    }).length;
+
     tellPanel({
       phase: 'done',
       detected: detection.fields.length,
       filled,
       repaired: repaired.length,
-      warning: stillWrong.length
-        ? `${stillWrong.length} field${stillWrong.length === 1 ? '' : 's'} the form is still rejecting — ${stillWrong[0].label}. Retype ${stillWrong.length === 1 ? 'it' : 'them'} by hand.`
-        : warning || (repaired.length
-          ? `Fixed ${repaired.length} field${repaired.length === 1 ? '' : 's'} the form had rejected.`
-          : (stats.leftBlankOnPurpose
-            ? `${stats.leftBlankOnPurpose} field${stats.leftBlankOnPurpose === 1 ? '' : 's'} left blank because you saved them that way.`
-            : null)),
+      warning: warning
+        || (stillFlagged
+          ? `${stillFlagged} field${stillFlagged === 1 ? '' : 's'} the form is still rejecting — open ${stillFlagged === 1 ? 'it' : 'them'} and retype to clear the error.`
+          : null)
+        || (stats.leftBlankOnPurpose
+          ? `${stats.leftBlankOnPurpose} field${stats.leftBlankOnPurpose === 1 ? '' : 's'} left blank because you saved them that way.`
+          : null),
     });
     ui.update({
       title: `${filled} of ${detection.fields.length} filled`,
@@ -388,6 +375,20 @@
       });
     }
     if (msg.type === 'SAVE_ANSWERS_NOW') { saveAnswers(); respond({ ok: true }); }
+
+    // Reopening the panel after closing it means a new application. Drop what we
+    // planned for the last one and clear the ink, so nothing on screen or in
+    // memory refers to a posting the user has moved on from. Their own typing is
+    // untouched: this forgets our work, not theirs.
+    if (msg.type === 'RESET_SESSION') {
+      lastPlan = null;
+      lastDetection = null;
+      lastStepSignature = '';
+      for (const el of document.querySelectorAll('.jf-filled, .jf-review, .jf-ai')) {
+        el.classList.remove('jf-filled', 'jf-review', 'jf-ai');
+      }
+      respond({ ok: true });
+    }
     if (msg.type === 'TOGGLE_PANEL') { JF.overlay.toggle(msg.payload || {}); respond({ ok: true, open: JF.overlay.isOpen() }); }
     if (msg.type === 'OPEN_PANEL') { JF.overlay.open(msg.payload || {}); respond({ ok: true }); }
     return true;

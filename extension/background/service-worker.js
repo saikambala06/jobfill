@@ -63,6 +63,28 @@ const HANDLERS = {
   GET_PROFILE: () => api('/api/profile'),
   GET_STATS: () => api('/api/applications/stats'),
 
+  /**
+   * Ask a tab what is on it, injecting the content script first if the tab has
+   * lost it. A Workday step change can tear out the whole document, and the panel
+   * polling a tab that no longer answers is what left the "Looking for the next
+   * step…" spinner running with nothing behind it.
+   */
+  RESCAN_TAB: async (p) => {
+    const tab = p.tabId ? await chrome.tabs.get(p.tabId).catch(() => null)
+      : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    if (!tab) return { ok: false, error: 'No page to scan.' };
+    const res = await tell(tab, { type: 'SCAN_ONLY', payload: { force: true } });
+    if (!res) return { ok: false, error: 'This page cannot be read. Reload it and try again.' };
+    return { ok: true, data: { ...res.data, tabId: tab.id, url: tab.url, title: tab.title } };
+  },
+
+  RESET_SESSION: async (p) => {
+    const tab = p.tabId ? await chrome.tabs.get(p.tabId).catch(() => null)
+      : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    if (tab) await tell(tab, { type: 'RESET_SESSION' });
+    return { ok: true };
+  },
+
   LOGIN: async (p) => {
     const res = await api('/api/auth/login', { method: 'POST', body: p, auth: false });
     if (res.ok) {
@@ -130,81 +152,104 @@ async function triggerFill(tab, opts = {}) {
   return tell(tab, { type: 'RUN_AUTOFILL', payload: opts });
 }
 
+/* ------------------------------------------------ side-panel toggle ----- */
 /**
- * The toolbar icon opens the side panel.
+ * The toolbar icon cycles: open → closed → open fresh.
  *
- * A side panel is docked beside the page rather than floating over it, so it stays
- * open while the user works through the form — it survives clicks, scrolling and
- * the multi-step navigation that a browser popup cannot. Chrome opens it for us
- * once `openPanelOnActionClick` is set, which is why there is no onClicked handler
- * here: registering one would suppress that behaviour.
- */
-/**
- * Chrome can open a side panel for you on an icon click, but it cannot close one —
- * there is no `sidePanel.close()`. Letting Chrome handle the click therefore gives
- * open-only behaviour, with the second click doing nothing at all.
+ * Chrome's built-in `openPanelOnActionClick` only ever opens, so a second click
+ * did nothing and there was no way to start over on a new application without
+ * signing out. Driving the panel from our own `onClicked` handler costs us that
+ * built-in behaviour — hence `openPanelOnActionClick: false` — but buys the third
+ * state, which is the one that matters: reopening on a different job posting has
+ * to forget the last one rather than describe it.
  *
- * So we take the click ourselves. The panel announces itself over a long-lived
- * port while it is alive, which tells us whether the next click means open or
- * close; closing is the panel calling `window.close()` on itself, which is the one
- * thing that does work. Because that tears the document down, every open starts
- * from a clean panel rather than resuming the last application.
+ * Open/closed is not something Chrome will tell us, so the panel reports it. It
+ * holds a long-lived port for exactly as long as it is on screen; the port dying
+ * *is* the close event. The panel reconnects if the worker is recycled beneath
+ * it, so this map stays true across a worker restart.
  */
-const openPanels = new Map(); // windowId -> Port
+const panelPorts = new Map();   // windowId → port
+const freshOnOpen = new Set();  // windowIds whose next open must start clean
+const PANEL_PATH = 'sidepanel/sidepanel.html';
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'jobfill-sidepanel') return;
-  const windowId = port.sender?.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-  port.postMessage({ type: 'HELLO' });
+  if (port.name !== 'jobfill-panel') return;
+  let windowId = null;
 
-  // The panel tells us which window it belongs to; the sender does not carry it.
   port.onMessage.addListener((msg) => {
-    if (msg?.type === 'REGISTER' && typeof msg.windowId === 'number') {
-      openPanels.set(msg.windowId, port);
-      port._windowId = msg.windowId;
+    if (msg?.type === 'PANEL_CLOSING') {
+      // A real teardown, however it was triggered — our close, or Chrome's own X.
+      // Either way the next open is a new application.
+      if (windowId !== null) freshOnOpen.add(windowId);
+      return;
     }
+    if (msg?.type !== 'PANEL_HELLO') return;
+    windowId = msg.windowId;
+    panelPorts.set(windowId, port);
+    // Whether this open is a fresh start is decided here, not in storage: a
+    // storage write racing a panel boot is exactly the kind of flake that makes
+    // "sometimes it remembers, sometimes it doesn't" bugs.
+    const fresh = freshOnOpen.delete(windowId);
+    port.postMessage({ type: 'PANEL_BOOT', fresh });
   });
+
   port.onDisconnect.addListener(() => {
-    const id = port._windowId ?? windowId;
-    if (openPanels.get(id) === port) openPanels.delete(id);
+    if (windowId !== null && panelPorts.get(windowId) === port) panelPorts.delete(windowId);
+  });
+});
+
+/**
+ * Last resort for a panel that did not close itself. Disabling the panel for the
+ * active tab dismisses it; it is re-enabled straight after so the next click can
+ * open it again.
+ */
+async function forceClose(windowId) {
+  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  if (!tab?.id) return;
+  try {
+    await chrome.sidePanel.setOptions({ tabId: tab.id, enabled: false });
+    setTimeout(() => {
+      chrome.sidePanel.setOptions({ tabId: tab.id, path: PANEL_PATH, enabled: true }).catch(() => {});
+    }, 250);
+  } catch (err) {
+    console.warn('[jobfill] could not close the panel', err?.message);
+  }
+}
+
+/**
+ * `sidePanel.open()` must be reached without awaiting anything first — Chrome
+ * checks that a user gesture is still in progress, and a resolved promise ends it.
+ * That is why nothing in this handler is awaited before the open call.
+ */
+chrome.action.onClicked.addListener((tab) => {
+  const windowId = tab?.windowId;
+  if (windowId === undefined) return;
+
+  if (panelPorts.has(windowId)) {
+    // Second click: shut it. Mark the next open as a fresh one.
+    freshOnOpen.add(windowId);
+    try { panelPorts.get(windowId).postMessage({ type: 'PANEL_CLOSE' }); }
+    catch { panelPorts.delete(windowId); }
+    setTimeout(() => { if (panelPorts.has(windowId)) forceClose(windowId); }, 500);
+    return;
+  }
+
+  chrome.sidePanel.open({ windowId }).catch((err) => {
+    console.warn('[jobfill] side panel would not open', err?.message);
+    freshOnOpen.delete(windowId);
   });
 });
 
 async function enableSidePanel() {
   try {
-    // We drive the click, so Chrome must not.
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
+    await chrome.sidePanel.setOptions({ path: PANEL_PATH, enabled: true });
   } catch (err) {
     console.warn('[jobfill] side panel unavailable', err?.message);
   }
 }
 enableSidePanel();
 chrome.runtime.onStartup?.addListener(enableSidePanel);
-
-chrome.action.onClicked.addListener(async (tab) => {
-  const windowId = tab?.windowId;
-  const open = openPanels.get(windowId);
-
-  if (open) {
-    try { open.postMessage({ type: 'CLOSE' }); } catch { openPanels.delete(windowId); }
-    return;
-  }
-
-  const { token } = await chrome.storage.local.get('token');
-  if (!token) {
-    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html?welcome=1') });
-    return;
-  }
-
-  try {
-    await chrome.sidePanel.setOptions({ path: 'sidepanel/sidepanel.html', enabled: true });
-    // open() must be called synchronously enough to still count as a user gesture.
-    await chrome.sidePanel.open(tab?.id ? { tabId: tab.id } : { windowId });
-  } catch (err) {
-    console.warn('[jobfill] could not open the side panel', err?.message);
-    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') });
-  }
-});
 
 
 chrome.commands?.onCommand.addListener(async (command) => {
