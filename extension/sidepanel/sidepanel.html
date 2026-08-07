@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JobFill</title>
+  <link rel="stylesheet" href="../popup/popup.css" />
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body class="sidepanel">
+
+<!-- ── signed out ────────────────────────────────────────────────────────── -->
+<section id="auth" class="view" hidden>
+  <header class="masthead">
+    <span class="stamp">JF</span>
+    <h1>JobFill</h1>
+    <p class="sub">Fill applications from one saved profile.</p>
+  </header>
+
+  <form id="auth-form" class="form" novalidate>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username" required />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required minlength="8" />
+    </div>
+    <div class="field" id="name-field" hidden>
+      <label for="name">Name</label>
+      <input id="name" type="text" autocomplete="name" />
+    </div>
+    <p id="auth-error" class="error" role="alert" hidden></p>
+    <button type="submit" class="btn primary" id="auth-submit">Sign in</button>
+    <button type="button" class="linkish" id="auth-toggle">Create an account instead</button>
+  </form>
+
+  <details class="settings">
+    <summary>Server address</summary>
+    <div class="field">
+      <label for="api-base">API URL</label>
+      <input id="api-base" type="url" placeholder="https://your-api.vercel.app" />
+    </div>
+    <button type="button" class="btn ghost small" id="save-api">Save address</button>
+  </details>
+</section>
+
+<!-- ── signed in ─────────────────────────────────────────────────────────── -->
+<section id="main" class="view" hidden>
+
+  <header class="masthead compact">
+    <span class="stamp">JF</span>
+    <div class="who">
+      <strong id="user-name">—</strong>
+      <span id="user-email"></span>
+    </div>
+    <button class="icon-btn" id="logout" title="Sign out" aria-label="Sign out">⏻</button>
+  </header>
+
+  <div class="detect" id="detect">
+    <div class="detect-row"><span class="k">Form</span><span class="v" id="detect-ats">Scanning…</span></div>
+    <div class="detect-row"><span class="k">Fields</span><span class="v" id="detect-count">—</span></div>
+    <div class="detect-row"><span class="k">Role</span><span class="v" id="detect-role">—</span></div>
+  </div>
+
+  <div class="field">
+    <label for="resume">Résumé to attach</label>
+    <select id="resume"></select>
+  </div>
+
+  <button class="btn primary big" id="fill">
+    <span class="btn-label">Fill this application</span>
+  </button>
+  <p id="fill-note" class="note" hidden></p>
+
+  <!-- the trace: what is being written, live -->
+  <div id="results" class="results" hidden>
+    <div class="meta-strip">
+      <span>Detected<b id="m-detected">—</b></span>
+      <span>Filled<b id="m-filled">0</b></span>
+      <span>To check<b id="m-review">0</b></span>
+    </div>
+    <div class="rule"><i id="trace-bar"></i></div>
+    <div id="rows"></div>
+  </div>
+
+  <div class="row-actions">
+    <button class="btn ghost small" id="save-answers">Save answers</button>
+    <button class="btn ghost small" id="open-dashboard">Dashboard</button>
+  </div>
+
+  <label class="toggle" for="auto-steps">
+    <input type="checkbox" id="auto-steps" />
+    <span class="toggle-text">
+      <strong>Fill new steps automatically</strong>
+      <span class="hint">Off by default. Nothing is written until you press Fill.</span>
+    </span>
+  </label>
+
+  <div class="completeness">
+    <div class="detect-row"><span class="k">Profile coverage</span><span class="v" id="completeness-pct">—</span></div>
+    <div class="rule"><i id="completeness-bar"></i></div>
+    <p class="hint" id="completeness-hint">Loading your profile…</p>
+  </div>
+
+  <dl class="tally">
+    <div><dt>Applications</dt><dd id="stat-apps">—</dd></div>
+    <div><dt>Fields filled</dt><dd id="stat-fields">—</dd></div>
+    <div><dt>Saved answers</dt><dd id="stat-answers">—</dd></div>
+  </dl>
+
+</section>
+
+<script src="sidepanel.js"></script>
+</body>
+</html>

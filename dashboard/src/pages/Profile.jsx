@@ -33,7 +33,16 @@ export default function Profile() {
   const [p, setP] = useState(null);
   const [flash, setFlash] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState('identity');
+  // A set, not a single id. This is the page you fill in once, and an accordion
+  // that closes what you just did to open the next thing makes it impossible to
+  // check your own work — you cannot see whether a section has anything in it
+  // without opening it and losing your place in the one before.
+  const [open, setOpen] = useState(() => new Set(['identity']));
+  const toggle = (id) => setOpen((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   useEffect(() => { if (data?.profile) setP(data.profile); }, [data]);
 
@@ -63,8 +72,16 @@ export default function Profile() {
 
       <Flash msg={flash} onDone={() => setFlash(null)} />
 
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+        <button className="btn ghost small"
+          onClick={() => setOpen(open.size === SECTIONS.length ? new Set() : new Set(SECTIONS.map((s) => s.id)))}>
+          {open.size === SECTIONS.length ? 'Collapse all' : 'Expand all'}
+        </button>
+      </div>
+
       {SECTIONS.map((s) => (
-        <Section key={s.id} s={s} open={open === s.id} onToggle={() => setOpen(open === s.id ? null : s.id)}>
+        <Section key={s.id} s={s} open={open.has(s.id)} filled={countFilled(p, s.id)}
+          onToggle={() => toggle(s.id)}>
           {s.id === 'identity' && (<>
             <Field label="First name"><Input value={p.identity?.firstName} onChange={set('identity', 'firstName')} /></Field>
             <Field label="Last name"><Input value={p.identity?.lastName} onChange={set('identity', 'lastName')} /></Field>
@@ -151,7 +168,19 @@ export default function Profile() {
   );
 }
 
-function Section({ s, open, onToggle, children }) {
+/**
+ * How many values a section actually holds. Shown on the closed header so the
+ * empty sections — the ones costing you filled fields on every application — are
+ * obvious without opening all nine.
+ */
+function countFilled(p, id) {
+  if (!p) return 0;
+  if (id === 'history') return (p.employment?.length || 0) + (p.education?.length || 0);
+  const group = p[id] || {};
+  return Object.values(group).filter((v) => (Array.isArray(v) ? v.length : String(v ?? '').trim())).length;
+}
+
+function Section({ s, open, onToggle, filled = 0, children }) {
   return (
     <div className="panel" style={{ marginBottom: 12, borderColor: open ? '#14161C' : undefined }}>
       <button onClick={onToggle} style={{ all: 'unset', cursor: 'pointer', display: 'block', width: '100%' }}>
@@ -163,7 +192,12 @@ function Section({ s, open, onToggle, children }) {
               {s.blurb && <p className="tiny muted" style={{ marginTop: 2 }}>{s.blurb}</p>}
             </div>
           </div>
-          <span className="key">{open ? '–' : '+'}</span>
+          <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <span className="key" style={{ color: filled ? undefined : '#F25C7A' }}>
+              {filled ? `${filled} filled` : 'empty'}
+            </span>
+            <span className="key">{open ? '–' : '+'}</span>
+          </span>
         </div>
       </button>
       {open && (

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { Profile, Answer, Resume, Application, User } from '../models.js';
 import { requireAuth, rateLimit, ah } from '../middleware.js';
 import { matchField, readProfileValue } from '../lib/matcher.js';
-import { findBestAnswer, bestOption, normalizeQuestion } from '../lib/similarity.js';
+import { findBestAnswer, bestOption, normalizeQuestion, questionSimilarity } from '../lib/similarity.js';
 import { complete } from '../ai/provider.js';
 import { PLANNER_SYSTEM, buildPlannerUser, COVER_LETTER_SYSTEM } from '../ai/prompts.js';
 
@@ -17,9 +17,36 @@ const EEO_KEYS = new Set(['gender', 'ethnicity', 'hispanicLatino', 'veteranStatu
  * a recruiter: a phone number in the extension box, a number in the dial-code
  * picker. If the profile has nothing specific for them they stay empty.
  */
-const NEVER_GUESS = /extension|\bext\b|ext\.|device\s*type|phone\s*type|country\s*(phone\s*)?code|phone\s*(country\s*)?code|dial|middle\s*initial|\bsuffix\b|confirm|verify|re-?enter/i;
+const NEVER_GUESS = /extension|\bext\b|ext\.|device\s*type|phone\s*type|country\s*(phone\s*)?code|phone\s*(country\s*)?code|dial|middle\s*initial|\bsuffix\b/i;
+
+/**
+ * Fields whose entire purpose is to repeat the value above them. The duplicate
+ * guard exists to stop one phone number answering four different questions — but
+ * a "Retype your email" box is the one place a repeat is the correct answer, so
+ * these are exempt from it.
+ */
+const REPEATS_ON_PURPOSE = /confirm|verify|re-?type|re-?enter|repeat|again/i;
 
 const scopeOf = (field) => (field.sectionKind ? `${field.sectionKind}:${field.sectionIndex ?? 0}` : '');
+const kindOf = (scope) => (scope || '').split(':')[0];
+const indexOf = (scope) => Number((scope || '').split(':')[1] || 0);
+
+/**
+ * May an answer saved under `answerScope` be reused for a field in `fieldScope`?
+ *
+ * Two entries of the same repeating block are never interchangeable — the second
+ * job's title is not the first job's title, and treating them as the same question
+ * is exactly what made every Work Experience row show the same employer. A saved
+ * answer from a form that had no blocks at all can still seed the first entry,
+ * which is the only borrowing that is safe.
+ */
+function scopesCompatible(answerScope, fieldScope) {
+  if ((answerScope || '') === (fieldScope || '')) return true;
+  const ak = kindOf(answerScope);
+  const fk = kindOf(fieldScope);
+  if (ak && fk) return false;
+  return indexOf(fieldScope) === 0 && indexOf(answerScope) === 0;
+}
 const SENSITIVE_KEYS = new Set([
   'requiresSponsorship', 'workAuthorized', 'visaStatus', 'expectedSalary',
   'currentSalary', 'criminalRecord', 'availableFrom', 'noticePeriod',
@@ -139,13 +166,16 @@ router.post('/plan', rateLimit({ max: 40, windowMs: 60_000 }), ah(async (req, re
     // Tier 2: has this exact question been answered before?
     const questionText = field.label || field.ariaLabel || field.placeholder || '';
     if (questionText.length > 3) {
-      // Prefer an answer saved in the same block; fall back to unscoped ones only
-      // when the field is not part of a repeating section at all.
+      // Two passes. An answer saved in the same block is the right one and only
+      // needs to be recognisably the same question. An answer from somewhere else
+      // might still apply — the same form asked on a different job board — but it
+      // has to be a much closer match before it is reused unasked.
       const scope = scopeOf(field);
-      const pool = scope
-        ? usableAnswers.filter((a) => (a.scope || '') === scope)
-        : usableAnswers.filter((a) => !a.scope);
-      const hit = findBestAnswer(questionText, pool.length ? pool : (scope ? [] : usableAnswers));
+      const sameScope = usableAnswers.filter((a) => (a.scope || '') === scope);
+      const elsewhere = usableAnswers.filter((a) => (a.scope || '') !== scope && scopesCompatible(a.scope, scope));
+
+      const hit = findBestAnswer(questionText, sameScope, 0.82)
+        || findBestAnswer(questionText, elsewhere, 0.9);
       if (hit) {
         const shaped = shapeValue(hit.entry.chosenOptions?.[0] || hit.entry.answer, field);
         if (shaped) {
@@ -163,6 +193,18 @@ router.post('/plan', rateLimit({ max: 40, windowMs: 60_000 }), ah(async (req, re
         }
       }
     }
+
+    // Not confident enough to reuse on its own, but the planner should still see
+    // it. "Tell us about a time you led a project" and "Describe a project you
+    // led" are the same question in two voices, and a model can tell that where a
+    // trigram score cannot. Without this the saved answer is simply forgotten.
+    const nearby = usableAnswers
+      .filter((a) => scopesCompatible(a.scope, scopeOf(field)))
+      .map((a) => ({ q: a.question, a: a.answer, score: questionSimilarity(questionText, a.question) }))
+      .filter((c) => c.score >= 0.55)
+      .sort((x, y) => y.score - x.score)
+      .slice(0, 3);
+    if (nearby.length) field.priorCandidates = nearby.map(({ q, a }) => ({ q, a }));
 
     unresolved.push(field);
   }
@@ -200,7 +242,7 @@ router.post('/plan', rateLimit({ max: 40, windowMs: 60_000 }), ah(async (req, re
         // phone number answering "Phone", "Extension" and "Device Type" in turn.
         // The first field to claim a value keeps it.
         const dupKey = String(fill.value).toLowerCase().trim();
-        if (dupKey.length > 2 && usedValues.has(dupKey)) continue;
+        if (dupKey.length > 2 && usedValues.has(dupKey) && !REPEATS_ON_PURPOSE.test(labelText)) continue;
 
         // The model is told to return exact option strings, but trust-and-verify:
         // snap anything it returns back onto a real option before we act on it.
@@ -214,12 +256,16 @@ router.post('/plan', rateLimit({ max: 40, windowMs: 60_000 }), ah(async (req, re
         }
 
         usedValues.set(String(value).toLowerCase().trim(), `ai:${fill.uid}`);
+        // Credit where it is due: an answer the model recognised as one the user
+        // had already written is a remembered answer, not an invented one, and the
+        // review panel should not ask them to check their own words.
+        const reused = fill.reusedPriorAnswer === true;
         fills.push({
           uid: fill.uid,
           value,
           label,
           confidence: Math.min(0.95, Number(fill.confidence) || 0.7),
-          via: 'ai',
+          via: reused ? 'memory' : 'ai',
           reasoning: fill.reasoning,
           needsReview: fill.needsReview ?? true,
           isGenerated: field.control === 'textarea',

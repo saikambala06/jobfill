@@ -2,7 +2,7 @@
    deliberate blanks, one value never landing in two fields, section-scoped answer
    memory, and option matching that refuses to guess on a long list.            */
 import { matchField, readProfileValue } from '../server/src/lib/matcher.js';
-import { bestOption, findBestAnswer, normalizeQuestion } from '../server/src/lib/similarity.js';
+import { bestOption, findBestAnswer, normalizeQuestion, questionSimilarity } from '../server/src/lib/similarity.js';
 
 let pass = 0, fail = 0;
 const t = (name, cond, got) => {
@@ -132,6 +132,70 @@ t('a block with no data returns nothing, not entry 0',
 t('an unknown field inside a block does not fall back to flat rules',
   matchField(fieldIn('employment', 1, 'Phone')) === null,
   matchField(fieldIn('employment', 1, 'Phone'))?.key);
+
+/* ------------------------------------------- confirm / retype fields ------ */
+console.log('\n── a "retype" box is the same answer, not a new one ─────');
+const inbox = { identity: { email: 'vineetha2341@gmail.com' } };
+const emailField = (label) => ({ label, control: 'text', type: 'email' });
+for (const label of ['Valid Email', 'Retype Valid Email', 'Confirm Email', 'Re-enter Email']) {
+  const f = emailField(label);
+  const m = matchField(f);
+  t(`"${label}" resolves to the address`,
+    readProfileValue(inbox, m?.key, f) === 'vineetha2341@gmail.com',
+    { key: m?.key, value: readProfileValue(inbox, m?.key, f) });
+}
+t('"Valid Email" is the primary key', matchField(emailField('Valid Email')).key === 'email');
+t('"Retype Valid Email" is the alias key', matchField(emailField('Retype Valid Email')).key === 'emailConfirm');
+t('"Alternate Email" is still left alone', matchField(emailField('Alternate Email')) === null,
+  matchField(emailField('Alternate Email'))?.key);
+
+const REPEATS_ON_PURPOSE = /confirm|verify|re-?type|re-?enter|repeat|again/i;
+t('a retype field is exempt from the duplicate guard', REPEATS_ON_PURPOSE.test('Retype Valid Email'));
+t('a phone extension is not', !REPEATS_ON_PURPOSE.test('Phone Extension'));
+
+/* --------------------------------------- two-pass memory reuse ------------ */
+console.log('\n── a saved answer travels to another job board ──────────');
+const saved = [
+  { question: 'Why do you want to work at Acme?', scope: '', answer: 'Because of the data platform work.' },
+  { question: 'Job Title', scope: 'employment:0', answer: 'Senior Data Analyst' },
+];
+const kindOf = (sc) => (sc || '').split(':')[0];
+const indexOf = (sc) => Number((sc || '').split(':')[1] || 0);
+const scopesCompatible = (aScope, fScope) => {
+  if ((aScope || '') === (fScope || '')) return true;
+  const ak = kindOf(aScope); const fk = kindOf(fScope);
+  if (ak && fk) return false;
+  return indexOf(fScope) === 0 && indexOf(aScope) === 0;
+};
+const twoPass = (question, scope) => {
+  const same = saved.filter((a) => (a.scope || '') === scope);
+  const other = saved.filter((a) => (a.scope || '') !== scope && scopesCompatible(a.scope, scope));
+  return findBestAnswer(question, same, 0.82) || findBestAnswer(question, other, 0.9);
+};
+t('same question, same block → reused',
+  twoPass('Job Title', 'employment:0')?.entry.answer === 'Senior Data Analyst');
+t('same question, different block → not reused silently',
+  twoPass('Job Title', 'employment:1') === null,
+  twoPass('Job Title', 'employment:1')?.entry.answer);
+t('an unscoped question still matches itself',
+  twoPass('Why do you want to work at Acme?', '')?.entry.answer.startsWith('Because'));
+t('a flat saved answer may seed the first block',
+  scopesCompatible('', 'employment:0'));
+t('but never the second',
+  !scopesCompatible('', 'employment:1'));
+t('and education never answers for employment',
+  !scopesCompatible('education:0', 'employment:0'));
+
+console.log('\n── near-misses are handed to the model, not dropped ─────');
+const near = saved
+  .map((a) => ({ q: a.question, score: questionSimilarity('Why are you interested in working at Acme?', a.question) }))
+  .filter((c) => c.score >= 0.55)
+  .sort((x, y) => y.score - x.score);
+t('a reworded question surfaces as an AI candidate',
+  near.length > 0 && near[0].q.startsWith('Why do you want'),
+  near.map((n) => `${n.q} @${n.score.toFixed(2)}`));
+t('but is below the silent-reuse bar',
+  findBestAnswer('Why are you interested in working at Acme?', saved, 0.82) === null);
 
 console.log(`\n════ ${pass} passed, ${fail} failed ════\n`);
 process.exit(fail ? 1 : 0);

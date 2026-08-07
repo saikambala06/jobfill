@@ -95,6 +95,10 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     return true;
   }
 
+  // Broadcasts from the content script to the side panel pass straight through;
+  // the worker is not their destination and must not answer on their behalf.
+  if (msg.type === 'FILL_EVENT') { respond({ ok: true }); return true; }
+
   const handler = HANDLERS[msg.type];
   if (!handler) { respond({ ok: false, error: `Unknown action ${msg.type}` }); return true; }
 
@@ -126,26 +130,24 @@ async function triggerFill(tab, opts = {}) {
 }
 
 /**
- * The toolbar icon toggles the in-page panel.
+ * The toolbar icon opens the side panel.
  *
- * With no `default_popup` in the manifest this handler fires on every click, so
- * the panel opens on one click and closes on the next — and, because it lives in
- * the page rather than in a browser popup, clicking anywhere on the form leaves it
- * exactly where it was.
+ * A side panel is docked beside the page rather than floating over it, so it stays
+ * open while the user works through the form — it survives clicks, scrolling and
+ * the multi-step navigation that a browser popup cannot. Chrome opens it for us
+ * once `openPanelOnActionClick` is set, which is why there is no onClicked handler
+ * here: registering one would suppress that behaviour.
  */
-chrome.action.onClicked.addListener(async (tab) => {
-  const { token } = await chrome.storage.local.get('token');
-  if (!token) {
-    // Nothing useful to show until there is an account behind it.
-    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') });
-    return;
+async function enableSidePanel() {
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  } catch (err) {
+    console.warn('[jobfill] side panel unavailable', err?.message);
   }
-  if (!/^https?:/.test(tab?.url || '')) {
-    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html') });
-    return;
-  }
-  await tell(tab, { type: 'TOGGLE_PANEL', payload: {} });
-});
+}
+enableSidePanel();
+chrome.runtime.onStartup?.addListener(enableSidePanel);
+
 
 chrome.commands?.onCommand.addListener(async (command) => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -155,8 +157,10 @@ chrome.commands?.onCommand.addListener(async (command) => {
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   if (reason === 'install') {
-    await chrome.storage.local.set({ apiBase: DEFAULT_API, autoFillNewSteps: true });
-    chrome.tabs.create({ url: 'popup/popup.html?welcome=1' });
+    // Filling starts when the user presses Fill, and only then. Watching for new
+    // steps and filling them unprompted is available, but off until asked for.
+    await chrome.storage.local.set({ apiBase: DEFAULT_API, autoFillNewSteps: false });
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup/popup.html?welcome=1') });
   }
 });
 

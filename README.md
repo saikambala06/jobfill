@@ -24,6 +24,27 @@ single function on the same domain. See [DEPLOY.md](DEPLOY.md).
 
 ---
 
+## Where JobFill lives
+
+The extension opens as a **side panel** docked beside the application, not as a
+popup. Click the toolbar icon and it stays open through every step of the form —
+Workday's six pages, LinkedIn Easy Apply's wizard — showing what it filled and
+what you should check, while you work in the page next to it.
+
+Nothing is written to a form until you press **Fill this application**. Watching
+for new steps and filling them unprompted is available under *Fill new steps
+automatically*, and is off until you turn it on.
+
+### First run after upgrading
+
+Saved answers are now identified by question **and** the block they were asked in,
+so the second job's "Job Title" no longer overwrites the first. That changes a
+database index, so run this once per environment before deploying:
+
+```bash
+node scripts/migrate-answer-scope.js
+```
+
 ## How the filling actually works
 
 Three tiers, cheapest first. This is the central design decision and it is what keeps a

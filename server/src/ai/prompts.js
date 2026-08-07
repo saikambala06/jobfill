@@ -10,7 +10,7 @@ You receive: the candidate's structured profile, résumé text, previously writt
 You return JSON only.
 
 Output shape:
-{"fills":[{"uid":"<field uid>","value":<string|boolean|string[]>,"confidence":<0-1>,"reasoning":"<max 12 words>","needsReview":<bool>}]}
+{"fills":[{"uid":"<field uid>","value":<string|boolean|string[]>,"confidence":<0-1>,"reasoning":"<max 12 words>","needsReview":<bool>,"reusedPriorAnswer":<bool>}]}
 
 Rules:
 1. Only emit a fill when the profile, résumé, or a previous answer supports it. Omit the field entirely rather than guessing. An omitted field is a good outcome.
@@ -24,6 +24,7 @@ Rules:
 9. Never reuse one value across two fields. A phone number answers "Phone Number" and nothing else — not "Phone Extension", not "Phone Device Type", not "Country Phone Code". If a neighbouring field has no data of its own, omit it.
 10. A field carries "section" and "sectionIndex" when it belongs to a repeating block. "Company" in section "Work Experience 2" means employment[1].company — read the matching entry, never the first one, and never the profile's current employer.
 11. Never split one value across fields or concatenate several into one. A street line is the street only; city, state, postcode and country each have their own field when the form provides them.
+12. A field may carry "priorCandidates": answers this candidate has already written to questions that look similar. If one of them answers this field's question — the same question in different words, on a different job board — reuse it, edit it only as far as the new wording or word limit requires, and set "reusedPriorAnswer": true with needsReview false. Their own words beat anything you would write. If none of them fits, ignore them and set "reusedPriorAnswer": false.
 
 Canonical profile keys available: ${CANONICAL_KEYS.join(', ')}.`;
 
@@ -39,13 +40,14 @@ export function buildPlannerUser({ profile, resumeText, priorAnswers, fields, pa
     maxLength: f.maxLength || undefined,
     format: f.formatHint || undefined,
     options: f.options?.length ? f.options.slice(0, 60).map((o) => o.label) : undefined,
+    priorCandidates: f.priorCandidates?.length ? f.priorCandidates : undefined,
   }));
 
   return JSON.stringify({
     page: { title: page?.title, company: page?.company, role: page?.role, ats: page?.ats, url: page?.url },
     profile,
     resumeExcerpt: (resumeText || '').slice(0, 6000),
-    priorAnswers: (priorAnswers || []).slice(0, 25).map((a) => ({ q: a.question, a: a.answer })),
+    priorAnswers: (priorAnswers || []).slice(0, 40).map((a) => ({ q: a.question, a: a.answer })),
     fields: compactFields,
   });
 }

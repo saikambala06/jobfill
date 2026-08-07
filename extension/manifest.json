@@ -5,13 +5,15 @@
   "description": "Fills job applications from your saved profile and résumé, remembers your answers, and flags what to check before you submit.",
   "minimum_chrome_version": "116",
 
-  "permissions": ["storage", "activeTab", "scripting", "tabs"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs", "sidePanel"],
   "host_permissions": ["http://localhost:4000/*", "https://*/*"],
 
   "background": { "service_worker": "background/service-worker.js", "type": "module" },
 
+  "side_panel": { "default_path": "sidepanel/sidepanel.html" },
+
   "action": {
-    "default_title": "Open JobFill on this page",
+    "default_title": "Open JobFill beside this application",
     "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
   },
 
@@ -46,6 +48,6 @@
   },
 
   "web_accessible_resources": [
-    { "resources": ["content/content.css", "popup/popup.html"], "matches": ["https://*/*"] }
+    { "resources": ["content/content.css", "popup/popup.html", "sidepanel/sidepanel.html"], "matches": ["https://*/*"] }
   ]
 }

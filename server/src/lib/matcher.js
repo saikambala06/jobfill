@@ -13,7 +13,7 @@
 export const CANONICAL_KEYS = [
   // identity
   'firstName', 'lastName', 'middleName', 'fullName', 'preferredName', 'pronouns',
-  'email', 'phone', 'phoneCountryCode', 'phoneDeviceType', 'dateOfBirth',
+  'email', 'emailConfirm', 'phone', 'phoneCountryCode', 'phoneDeviceType', 'dateOfBirth',
   // location
   'addressLine1', 'addressLine2', 'city', 'state', 'country', 'postalCode',
   // links
@@ -51,7 +51,12 @@ export const RULES = [
   { key: 'preferredName', match: rx('preferred\\s*(name|first)', 'nickname', 'name you go by', 'what should we call you') },
   { key: 'fullName', match: rx('\\bfull\\s*name\\b', '^name$', '\\byour\\s*name\\b', 'legal name'), deny: rx('first|last|middle|preferred|user|company|school|reference|emergency'), weight: 0.8 },
   { key: 'pronouns', match: rx('pronoun') },
-  { key: 'email', match: rx('e-?mail', 'correo'), deny: rx('confirm|verify|re-?enter|alternate'), kind: 'email' },
+  // A "confirm" box is not a different question — it is the same answer typed
+  // twice, and leaving it blank fails the form's own validation. It gets its own
+  // rule (and its own key, so the duplicate-value guard knows the repeat is
+  // intentional) rather than being denied outright.
+  { key: 'emailConfirm', match: rx('(confirm|verify|re-?type|re-?enter|repeat)\\s*(your\\s*)?(valid\\s*)?e-?mail', 'e-?mail\\s*(confirm|again)'), kind: 'email', weight: 1.4 },
+  { key: 'email', match: rx('e-?mail', 'correo'), deny: rx('confirm|verify|re-?enter|re-?type|repeat|alternate'), kind: 'email' },
   // Every deny term here is a field that sits *next to* the phone number on a real
   // form and used to inherit its value: the extension box, the device-type
   // dropdown, the dial-code picker. Matching "phone" alone put the same number in
@@ -309,8 +314,12 @@ function streetOnly(line, loc = {}) {
  * Experience block reads `profile.employment[1].company` rather than collapsing
  * every entry onto the same record.
  */
+/** Keys that are deliberately a second copy of another key's value. */
+const ALIASES = { emailConfirm: 'email' };
+
 export function readProfileValue(profile, key, field) {
   if (!profile || !key) return undefined;
+  if (ALIASES[key]) return readProfileValue(profile, ALIASES[key], field);
 
   if (key.includes('.')) {
     const [group, leaf] = key.split('.');

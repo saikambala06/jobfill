@@ -12,6 +12,26 @@
 
   const send = (type, payload) => chrome.runtime.sendMessage({ type, payload });
 
+  /**
+   * Narrate progress to the side panel. Fire-and-forget: if no panel is open the
+   * message has no receiver and rejects, which is not an error worth surfacing.
+   */
+  const tellPanel = (payload) => {
+    chrome.runtime.sendMessage({ type: 'FILL_EVENT', payload }).catch(() => {});
+  };
+
+  // Which surface is showing the results. The in-page overlay is only rendered
+  // when nothing better is available; with the side panel docked it would be a
+  // second copy of the same list, sitting on top of the form.
+  let surface = 'overlay';
+  const usingPanel = () => surface === 'sidepanel';
+  const ui = {
+    show: (patch) => { if (!usingPanel()) JF.overlay.show(patch); },
+    update: (patch) => { if (!usingPanel()) JF.overlay.update(patch); },
+    addRow: (row) => { if (!usingPanel()) JF.overlay.addRow(row); },
+    progress: (a, b) => { if (!usingPanel()) JF.overlay.progress(a, b); },
+  };
+
   let lastDetection = null;
   let lastPlan = null;
   let running = false;
@@ -47,12 +67,15 @@
 
   async function doRun(opts = {}) {
     const started = Date.now();
+    surface = opts.surface || surface;
+
     const detection = JF.detectFields({ force: true });
     lastDetection = detection;
     lastStepSignature = stepSignature(detection.fields);
 
     if (!detection.fields.length) {
-      JF.overlay.show({
+      tellPanel({ phase: 'error', message: 'No form found on this page.' });
+      ui.show({
         title: 'No form found here',
         rows: [], stats: { detected: 0 },
         warning: 'Open the application page itself, then run the fill again.',
@@ -60,7 +83,8 @@
       return;
     }
 
-    JF.overlay.show({
+    tellPanel({ phase: 'start', detected: detection.fields.length });
+    ui.show({
       title: `Filling on ${detection.adapter.name}`,
       rows: [],
       unresolved: [],
@@ -80,10 +104,9 @@
     });
 
     if (!res?.ok) {
-      JF.overlay.update({
-        warning: res?.error || 'Could not reach the fill service. Check you are signed in.',
-        stats: { detected: detection.fields.length },
-      });
+      const message = res?.error || 'Could not reach the fill service. Check you are signed in.';
+      tellPanel({ phase: 'error', message });
+      ui.update({ warning: message, stats: { detected: detection.fields.length } });
       return;
     }
 
@@ -109,8 +132,24 @@
         quirks: detection.adapter.quirks,
       });
       results.push(result);
-      if (result.ok) JF.overlay.addRow({ ...result, uid: fill.uid, value: fill.label ?? fill.value });
-      JF.overlay.progress(i + 1, fills.length);
+
+      const row = {
+        uid: fill.uid,
+        ok: result.ok,
+        skipped: Boolean(result.skipped),
+        label: field.label || result.label,
+        value: fill.label ?? fill.value,
+        via: fill.via,
+        needsReview: fill.needsReview,
+        reason: result.reason,
+      };
+      // A refusal is worth showing too: "we left this because you had typed in it"
+      // is the difference between the extension looking broken and looking careful.
+      if (result.ok || result.skipped) {
+        tellPanel({ phase: 'row', row, done: i + 1, total: fills.length });
+        if (result.ok) ui.addRow({ ...result, uid: fill.uid, value: fill.label ?? fill.value });
+      }
+      ui.progress(i + 1, fills.length);
 
       // Only the widgets that actually re-render need a beat between writes.
       // Pausing after every plain text box cost roughly a second per twelve fields
@@ -120,7 +159,15 @@
     }
 
     const filled = results.filter((r) => r.ok).length;
-    JF.overlay.update({
+    tellPanel({
+      phase: 'done',
+      detected: detection.fields.length,
+      filled,
+      warning: warning || (stats.leftBlankOnPurpose
+        ? `${stats.leftBlankOnPurpose} field${stats.leftBlankOnPurpose === 1 ? '' : 's'} left blank because you saved them that way.`
+        : null),
+    });
+    ui.update({
       title: `${filled} of ${detection.fields.length} filled`,
       unresolved,
       warning,
@@ -191,18 +238,22 @@
     }
 
     if (!answers.length) {
-      JF.overlay.update({ warning: 'Nothing to save yet — fill some answers first.' });
+      const message = 'Nothing to save yet — fill some answers first.';
+      tellPanel({ phase: 'error', message });
+      ui.update({ warning: message });
       return;
     }
 
     const kept = answers.filter((a) => !a.skipped).length;
     const blanks = answers.length - kept;
     const res = await send('SAVE_ANSWERS', { answers, site: location.hostname });
-    JF.overlay.update({
-      warning: res?.ok
-        ? `Saved ${kept} answer${kept === 1 ? '' : 's'}${blanks ? ` and ${blanks} field${blanks === 1 ? '' : 's'} you chose to leave blank` : ''}. They will fill exactly this way next time.`
-        : (res?.error || 'Could not save your answers.'),
-    });
+
+    const message = res?.ok
+      ? `Saved ${kept} answer${kept === 1 ? '' : 's'}${blanks ? ` and ${blanks} field${blanks === 1 ? '' : 's'} you chose to leave blank` : ''}. They will fill exactly this way next time.`
+      : (res?.error || 'Could not save your answers.');
+
+    tellPanel({ phase: res?.ok ? 'saved' : 'error', message });
+    ui.update({ warning: message });
   }
 
   /* -------------------------------------------------------- regenerate --- */
@@ -220,7 +271,9 @@
 
     if (res?.ok) {
       await JF.applyFill({ uid, value: res.data.answer, via: 'ai', needsReview: true }, field, {});
-      JF.overlay.addRow({ uid, ok: true, label: field.label, value: res.data.answer, via: 'ai', needsReview: true });
+      const row = { uid, ok: true, label: field.label, value: res.data.answer, via: 'ai', needsReview: true };
+      tellPanel({ phase: 'row', row });
+      ui.addRow(row);
     } else {
       button.textContent = 'Retry';
       button.disabled = false;
@@ -236,6 +289,7 @@
   /* ------------------------------------------------------------ wiring --- */
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (msg.type === 'RUN_AUTOFILL') { run(msg.payload || {}); respond({ ok: true }); }
+    if (msg.type === 'SET_SURFACE') { surface = msg.payload?.surface || 'overlay'; respond({ ok: true }); }
     if (msg.type === 'SCAN_ONLY') {
       const d = JF.detectFields();
       respond({ ok: true, data: { count: d.fields.length, ats: d.adapter.name, page: d.page } });

@@ -26,6 +26,18 @@ node -e '
   console.log("stripped localhost permissions; version " + m.version);
 ' "$STAGE/manifest.json"
 
+# Sanity-check the pieces the side panel needs before we ship a broken build.
+for required in sidepanel/sidepanel.html sidepanel/sidepanel.js sidepanel/sidepanel.css popup/popup.css; do
+  [ -f "$STAGE/$required" ] || { echo "missing $required" >&2; exit 1; }
+done
+node -e '
+  const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (!m.side_panel?.default_path) throw new Error("manifest is missing side_panel");
+  if (!m.permissions.includes("sidePanel")) throw new Error("manifest is missing the sidePanel permission");
+  if (m.action?.default_popup) throw new Error("default_popup would stop the side panel opening on click");
+  console.log("side panel wiring verified");
+' "$STAGE/manifest.json"
+
 ( cd "$STAGE" && zip -qr "$OUT/jobfill-extension.zip" . -x '.*' )
 rm -rf "$STAGE"
 
