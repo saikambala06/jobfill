@@ -309,7 +309,11 @@ async function loadProfile() {
 async function loadStats() {
   const res = await send('GET_STATS');
   if (!res?.ok) return;
-  $('stat-apps').textContent = res.data.totalApplications ?? 0;
+  // The completed count, not the row count: this is the number the user is
+  // trying to grow, and the only one that moves when they confirm they are done.
+  $('stat-apps').textContent = res.data.completedApplications
+    ?? res.data.byStatus?.submitted
+    ?? 0;
   $('stat-fields').textContent = res.data.fieldsFilled ?? 0;
   $('stat-answers').textContent = res.data.savedAnswers ?? 0;
 }
@@ -433,6 +437,12 @@ $('dlg-ok').onclick = async () => {
       note = res?.error || 'Could not record the application.';
       warn = true;
       return;
+    }
+
+    // Show the new total straight away rather than waiting on the stats refetch,
+    // so pressing the button visibly does something.
+    if (typeof res.data?.completed === 'number') {
+      $('stat-apps').textContent = res.data.completed;
     }
 
     dialog.busy('Looking for the next step…');

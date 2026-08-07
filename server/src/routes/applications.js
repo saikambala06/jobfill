@@ -48,19 +48,25 @@ router.get('/stats', ah(async (req, res) => {
   ]);
 
   const t = totals[0] || {};
+  const status = Object.fromEntries(byStatus.map((s) => [s._id, s.count]));
   // Every field the tool filled is a field the user did not retype. That is the
   // number worth surfacing, so we express saved time in the same units.
   const minutesSaved = Math.round(((t.fieldsFilled || 0) * 7) / 60);
 
   res.json({
     totalApplications: t.total || 0,
+    // "Applications" means the ones the user actually finished, which is the
+    // number that moves when they confirm they are done. Total rows include
+    // every posting the extension merely touched, so the two are not the same
+    // and reporting only the total made confirming look like it did nothing.
+    completedApplications: status.submitted || 0,
     fieldsFilled: t.fieldsFilled || 0,
     fieldsDetected: t.fieldsDetected || 0,
     avgDurationMs: Math.round(t.avgDuration || 0),
     minutesSaved,
     savedAnswers: answerCount,
     documents: resumeCount,
-    byStatus: Object.fromEntries(byStatus.map((s) => [s._id, s.count])),
+    byStatus: status,
     byAts: byAts.filter((a) => a._id).map((a) => ({ ats: a._id, count: a.count })),
     daily: recent.map((d) => ({ date: d._id, count: d.count })),
   });
@@ -76,13 +82,25 @@ router.post('/complete', ah(async (req, res) => {
   const key = applicationKey(req.body?.url || '');
   const patch = { status: 'submitted', completedAt: new Date() };
 
+  // Anything not yet submitted for this posting is the row to promote. Matching
+  // only `status: 'filled'` missed a row already marked submitted and opened a
+  // second one beside it, so confirming twice on the same application counted it
+  // twice and quietly inflated the total.
   let application = await Application.findOneAndUpdate(
-    { userId: req.user._id, applicationKey: key, status: 'filled' },
+    { userId: req.user._id, applicationKey: key, status: { $ne: 'submitted' } },
     { $set: patch },
     { new: true, sort: { createdAt: -1 } },
   ).lean();
 
-  // Pressing Done without a fill first is still a real application; record it.
+  // Already submitted: confirming again is a no-op, not a new application.
+  if (!application) {
+    application = await Application
+      .findOne({ userId: req.user._id, applicationKey: key, status: 'submitted' })
+      .sort({ createdAt: -1 })
+      .lean();
+  }
+
+  // Pressing done without a fill first is still a real application; record it.
   if (!application) {
     application = await Application.create({
       userId: req.user._id,

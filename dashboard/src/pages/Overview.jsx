@@ -60,7 +60,8 @@ export default function Overview() {
         <Stagger className="grid c2" style={{ alignItems: 'start' }}>
           <Item>
             <div className="trace-block">
-              <TraceLine label="Applications filled" value={stats.totalApplications} delay={.05} />
+              <TraceLine label="Applications completed" value={stats.completedApplications ?? 0} delay={.05}
+                note={`of ${stats.totalApplications} started`} />
               <TraceLine label="Fields completed" value={stats.fieldsFilled} delay={.18}
                 note={`of ${stats.fieldsDetected} detected`} />
               <TraceLine label="Typing avoided" delay={.31}

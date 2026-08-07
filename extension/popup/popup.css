@@ -19,6 +19,19 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/**
+ * `hidden` means hidden.
+ *
+ * The browser's own `[hidden] { display: none }` lives in the user-agent
+ * stylesheet, which every author rule outranks — so any element given a `display`
+ * of its own stayed on screen with the attribute set and no warning. That is how
+ * the confirm dialog came to greet people the moment the panel opened, and why
+ * "Not yet" looked like a dead button: the script was setting `hidden` correctly
+ * and `.scrim { display: grid }` was quietly overruling it. Stating the rule here,
+ * once, means every `hidden` in the markup can be trusted.
+ */
+[hidden] { display: none !important; }
+
 body {
   width: 340px;
   font-family: var(--sans);

@@ -97,7 +97,60 @@ t('then reloads the fields from the page', /Loading the new fields/.test(js));
 t('and fills the next step when there is one',
   /waitForNextStep[\s\S]{0,900}\$\('fill'\)\.click\(\)/.test(js));
 
-/* --------------------------------------------- the spinner always ends -- */
+/* ------------------------------------------- hidden actually hides ------ */
+/* The bug this catches: `[hidden] { display: none }` lives in the user-agent
+   stylesheet, and every author rule outranks it. So `.scrim { display: grid }`
+   left the confirm dialog on screen with the attribute set — it greeted people
+   the moment the panel opened, and "Not yet" looked like a dead button because
+   the script was setting `hidden` and the CSS was overruling it silently.      */
+console.log('\n── nothing marked hidden can render ────────────────────');
+{
+  // Comments and at-rule blocks both confuse a naive brace parse — a comment
+  // sitting above a rule gets swallowed into its selector, and `el.matches()`
+  // then throws and skips the very rule worth checking.
+  const sheet = (css + popupCss)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/@(keyframes|media|supports)[^{]*\{(?:[^{}]*\{[^}]*\})*[^{}]*\}/g, '');
+
+  t('the stylesheet states the rule itself',
+    /\[hidden\][^{]*\{[^}]*display:\s*none\s*!important/.test(css + popupCss));
+
+  // Every rule that sets `display`, paired with the selector that carries it.
+  const rules = [...sheet.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .map(([, sel, body]) => ({ sel: sel.trim(), body }))
+    .filter((r) => /(^|[;\s])display\s*:/.test(r.body) && !r.sel.startsWith('@'));
+
+  const hiddenEls = [...doc.querySelectorAll('[hidden]')];
+  t('the markup does rely on the attribute', hiddenEls.length > 0);
+
+  const exposed = [];
+  for (const el of hiddenEls) {
+    for (const rule of rules) {
+      for (const sel of rule.sel.split(',').map((s) => s.trim())) {
+        if (!sel || sel.includes('[hidden]') || sel.includes(':')) continue;
+        let matches = false;
+        try { matches = el.matches(sel); } catch { continue; }
+        // A rule that sets display on a hidden element is only safe if the
+        // element also has a hidden state of its own, or the global !important
+        // rule covers it — which the assertion above already checked.
+        if (matches && !/display:\s*none/.test(rule.body)) {
+          const guarded = rules.some((r) => r.sel.includes('[hidden]')
+            && r.sel.split(',').some((s) => { try { return el.matches(s.trim()); } catch { return false; } }));
+          if (!guarded) exposed.push(`#${el.id || el.className} ← ${sel}`);
+        }
+      }
+    }
+  }
+  t('no hidden element has an unguarded display rule', exposed.length === 0, exposed);
+  t('the scrim in particular has its own hidden state', /\.scrim\[hidden\]\s*\{[^}]*display:\s*none/.test(sheet));
+}
+
+/* --------------------------------------------- the dialog opens on cue -- */
+console.log('\n── the dialog only opens when asked ────────────────────');
+t('it is marked hidden in the markup', doc.getElementById('scrim')?.hasAttribute('hidden'));
+t('only the refresh button opens it',
+  (js.match(/dialog\.open\(\)/g) || []).length === 1 && /\$\('refresh'\)\.onclick[^\n]*dialog\.open\(\)/.test(js));
+t('nothing opens it during boot', !/boot[\s\S]{0,400}dialog\.open/.test(js));
 console.log('\n── the dialog cannot get stuck ─────────────────────────');
 t('the network wait is bounded', /withTimeout\(/.test(js));
 t('the step wait is bounded', /Date\.now\(\) < deadline/.test(js));

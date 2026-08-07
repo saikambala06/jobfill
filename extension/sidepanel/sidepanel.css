@@ -222,6 +222,9 @@ body.sidepanel .masthead {
   background: rgba(20, 22, 28, .42);
   animation: fade .16s ease both;
 }
+/* Stated again next to the rule that caused the trouble: a `display` here without
+   a matching hidden state is what put the confirm dialog on screen at boot. */
+.scrim[hidden] { display: none; }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 
 .dialog {
