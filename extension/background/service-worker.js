@@ -57,6 +57,7 @@ const HANDLERS = {
   SAVE_ANSWERS: (p) => api('/api/answers/bulk', { method: 'POST', body: p }),
   MATCH_ANSWER: (p) => api('/api/answers/match', { method: 'POST', body: p }),
   RECORD_FILL: (p) => api('/api/autofill/record', { method: 'POST', body: p }),
+  COMPLETE_APPLICATION: (p) => api('/api/applications/complete', { method: 'POST', body: p }),
   GET_DOCUMENT: (p) => api(`/api/resumes/${p.id}/file`),
   LIST_RESUMES: () => api('/api/resumes'),
   GET_PROFILE: () => api('/api/profile'),

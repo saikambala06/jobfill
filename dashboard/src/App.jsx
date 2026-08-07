@@ -8,6 +8,7 @@ import Profile from './pages/Profile.jsx';
 import Documents from './pages/Documents.jsx';
 import Answers from './pages/Answers.jsx';
 import Applications from './pages/Applications.jsx';
+import Settings from './pages/Settings.jsx';
 
 /* Nav is numbered because a profile really is filled section by section, the way
    a paper application is. The number is the section index, not ornament. */
@@ -17,6 +18,7 @@ const NAV = [
   { to: '/documents', idx: '03', label: 'Documents' },
   { to: '/answers', idx: '04', label: 'Saved answers', countKey: 'savedAnswers' },
   { to: '/applications', idx: '05', label: 'Applications', countKey: 'totalApplications' },
+  { to: '/settings', idx: '06', label: 'Settings' },
 ];
 
 function Shell({ children }) {
@@ -85,6 +87,7 @@ export default function App() {
       <Route path="/documents" element={<Guard><Documents /></Guard>} />
       <Route path="/answers" element={<Guard><Answers /></Guard>} />
       <Route path="/applications" element={<Guard><Applications /></Guard>} />
+      <Route path="/settings" element={<Guard><Settings /></Guard>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

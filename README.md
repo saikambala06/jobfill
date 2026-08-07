@@ -35,6 +35,13 @@ Nothing is written to a form until you press **Fill this application**. Watching
 for new steps and filling them unprompted is available under *Fill new steps
 automatically*, and is off until you turn it on.
 
+**Done** sits next to Fill. It asks whether you finished the forms, records the
+application as completed, then looks for the next step and fills it — so a
+six-page Workday application is one row in the dashboard, not six.
+
+Before signing in for the first time, open the extension from `chrome://extensions`
+and it renders as a centred setup card where you can point it at your API.
+
 ### First run after upgrading
 
 Saved answers are now identified by question **and** the block they were asked in,

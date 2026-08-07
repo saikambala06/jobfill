@@ -289,18 +289,61 @@
     return 'text';
   }
 
+  const PLACEHOLDER_OPTION = /^(select|choose|please select|--|\s*$)/i;
+
+  /**
+   * The choices a control offers.
+   *
+   * A `<select>` hands them over; a custom combobox does not, and returning an
+   * empty list for those meant the planner was answering "Country" and "How Did
+   * You Hear About Us?" with no idea what it was allowed to say — so it invented
+   * wording no option matched and the field stayed blank. Where the listbox is
+   * already in the DOM (Workday renders it collapsed, not absent) we can read it
+   * without opening anything.
+   */
   function readOptions(el, control) {
     if (control === 'select' || control === 'multiselect') {
       return [...el.options]
         .filter((o) => o.value !== '' || o.textContent.trim())
         .map((o) => ({ value: o.value, label: textOf(o) }))
-        .filter((o) => o.label && !/^(select|choose|please select|--)/i.test(o.label));
+        .filter((o) => o.label && !PLACEHOLDER_OPTION.test(o.label));
     }
+
     if (el.getAttribute('list')) {
       const dl = document.getElementById(el.getAttribute('list'));
       if (dl) return [...dl.options].map((o) => ({ value: o.value, label: o.label || o.value }));
     }
+
+    if (control === 'combobox') {
+      const box = ownedListbox(el);
+      if (box) {
+        const found = [...box.querySelectorAll('[role="option"], li')]
+          .map((o) => ({ value: o.getAttribute('data-value') || textOf(o), label: textOf(o) }))
+          .filter((o) => o.label && !PLACEHOLDER_OPTION.test(o.label));
+        // A very long list is a country picker; the first 200 are plenty for the
+        // planner to see the shape without bloating the request.
+        if (found.length) return found.slice(0, 200);
+      }
+      // Some tenants keep a real <select> behind the custom widget.
+      const shadowSelect = el.closest('[data-automation-id], .field, div')?.querySelector('select');
+      if (shadowSelect?.options?.length) {
+        return [...shadowSelect.options]
+          .map((o) => ({ value: o.value, label: textOf(o) }))
+          .filter((o) => o.label && !PLACEHOLDER_OPTION.test(o.label));
+      }
+    }
     return [];
+  }
+
+  /** The listbox a combobox declares as its own, whether or not it is showing. */
+  function ownedListbox(el) {
+    const id = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+    if (id) {
+      const byId = document.getElementById(id);
+      if (byId) return byId;
+    }
+    const wrap = el.closest('[role="combobox"]') || el.parentElement;
+    return wrap?.querySelector('[role="listbox"]') || null;
   }
 
   /** Format hints let the filler write "MM/DD/YYYY" pages correctly. */
@@ -411,6 +454,7 @@
 
       const label = resolveLabel(el, adapter);
       const sectionText = resolveSection(el, adapter);
+      const opts = readOptions(el, control);
       const field = {
         uid: `f${counter++}`,
         selector: buildSelector(el),
@@ -432,7 +476,11 @@
         multiple: Boolean(el.multiple),
         formatHint: formatHint(el),
         currentValue: control === 'checkbox' ? el.checked : (el.value || ''),
-        options: readOptions(el, control),
+        options: opts,
+        // A combobox whose list we could not read still needs an answer — the
+        // filler matches it against the live options once the menu opens, so the
+        // planner should give the plain human value rather than stay silent.
+        optionsUnknown: control === 'combobox' && !opts.length,
         // Isolated checkboxes are consent/agreement toggles; the planner treats them differently.
         isConsent: control === 'checkbox' && /agree|consent|terms|privacy|acknowledge|certify/i.test(label),
       };

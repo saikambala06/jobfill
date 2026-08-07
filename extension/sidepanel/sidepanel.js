@@ -60,14 +60,25 @@ async function showMain() {
   $('main').hidden = false;
 
   const { user, autoFillNewSteps } = await chrome.storage.local.get(['user', 'autoFillNewSteps']);
-  $('user-name').textContent = user?.name || 'Your profile';
+  const name = user?.name || 'Your profile';
+  $('user-name').textContent = name;
   $('user-email').textContent = user?.email || '';
+  $('menu-name').textContent = name;
+  $('menu-email').textContent = user?.email || '';
+  $('avatar-initials').textContent = initials(name || user?.email || '?');
   $('auto-steps').checked = Boolean(autoFillNewSteps);
 
   scanPage();
   loadResumes();
   loadProfile();
   loadStats();
+}
+
+/** "Vinitha N" → "VN"; an email falls back to its first letter. */
+function initials(text) {
+  const parts = String(text).trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return String(text).slice(0, 2).toUpperCase();
 }
 
 /* ---------------------------------------------------------------- auth -- */
@@ -107,7 +118,26 @@ $('save-api').onclick = async () => {
   setTimeout(() => { $('save-api').textContent = 'Save address'; }, 1600);
 };
 
-$('logout').onclick = async () => { await send('LOGOUT'); clearResults(); showAuth(); };
+/* ------------------------------------------------------ account menu -- */
+const menu = () => $('account-menu');
+
+function closeMenu() {
+  menu().hidden = true;
+  $('account-btn').setAttribute('aria-expanded', 'false');
+}
+
+$('account-btn').onclick = (e) => {
+  e.stopPropagation();
+  const open = menu().hidden;
+  menu().hidden = !open;
+  $('account-btn').setAttribute('aria-expanded', String(open));
+};
+document.addEventListener('click', (e) => { if (!e.target.closest('.account')) closeMenu(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+
+$('menu-profile').onclick = () => { closeMenu(); openDashboard('/profile'); };
+$('menu-settings').onclick = () => { closeMenu(); openDashboard('/settings'); };
+$('logout').onclick = async () => { closeMenu(); await send('LOGOUT'); clearResults(); showAuth(); };
 
 /* ---------------------------------------------------------- page scan -- */
 async function scanPage() {
@@ -227,14 +257,81 @@ $('save-answers').onclick = async () => {
   await chrome.tabs.sendMessage(formTab.id, { type: 'SAVE_ANSWERS_NOW' }).catch(() => {});
 };
 
-$('open-dashboard').onclick = async () => {
+async function openDashboard(path = '/') {
   const { apiBase, dashboardUrl } = await chrome.storage.local.get(['apiBase', 'dashboardUrl']);
-  chrome.tabs.create({ url: dashboardUrl || (apiBase || 'http://localhost:5173').replace(/:4000$/, ':5173') });
-};
+  const base = (dashboardUrl || (apiBase || 'http://localhost:5173').replace(/:4000$/, ':5173')).replace(/\/+$/, '');
+  chrome.tabs.create({ url: `${base}${path}` });
+}
+$('open-dashboard').onclick = () => openDashboard('/');
 
 $('auto-steps').onchange = async (e) => {
   await chrome.storage.local.set({ autoFillNewSteps: e.target.checked });
 };
+
+/* ----------------------------------------------------------- done ------ */
+const dialog = {
+  open() { $('scrim').hidden = false; $('dlg-ask').hidden = false; $('dlg-busy').hidden = true; $('dlg-ok').focus(); },
+  busy(text) { $('dlg-ask').hidden = true; $('dlg-busy').hidden = false; $('dlg-busy-text').textContent = text; },
+  close() { $('scrim').hidden = true; },
+};
+
+$('done').onclick = () => dialog.open();
+$('dlg-cancel').onclick = () => dialog.close();
+$('scrim').onclick = (e) => { if (e.target === $('scrim')) dialog.close(); };
+
+/**
+ * Finish the application, then carry straight on to whatever comes next.
+ *
+ * Multi-page applications are the norm, so "done with this page" almost always
+ * means "now do the next one". Recording the completion and then filling the next
+ * step in the same gesture is the difference between a tool you drive and a tool
+ * you supervise.
+ */
+$('dlg-ok').onclick = async () => {
+  dialog.busy('Recording this application…');
+
+  const res = await send('COMPLETE_APPLICATION', { url: formTab?.url, title: formTab?.title });
+  if (!res?.ok) {
+    dialog.close();
+    showNote(res?.error || 'Could not record the application.', true);
+    return;
+  }
+
+  await loadStats();
+  dialog.busy('Looking for the next step…');
+
+  // Give the page a moment to navigate before deciding there is nothing left.
+  const next = await waitForNextStep();
+  dialog.close();
+
+  if (!next) {
+    showNote(`Application recorded. You have completed ${res.data.completed}.`);
+    return;
+  }
+  showNote(`Application recorded — filling the next step now.`);
+  $('fill').click();
+};
+
+/** Poll for a step with unfilled questions on it, for a few seconds. */
+async function waitForNextStep(timeoutMs = 6000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 700));
+    try {
+      const res = await chrome.tabs.sendMessage(formTab.id, { type: 'SCAN_ONLY', payload: { force: true } });
+      if (res?.ok && res.data.count > 0 && res.data.unfilled > 0) { await scanPage(); return true; }
+    } catch { /* mid-navigation; try again */ }
+  }
+  await scanPage();
+  return false;
+}
+
+function showNote(text, warn = false) {
+  const note = $('fill-note');
+  note.textContent = text;
+  note.className = warn ? 'note warn' : 'note';
+  note.hidden = false;
+}
 
 /* ------------------------------------------------------- live results -- */
 function clearResults() {
@@ -329,6 +426,19 @@ chrome.runtime.onMessage.addListener((msg) => {
     $('fill-note').className = 'note';
     $('fill-note').hidden = !p.message;
     loadStats();
+  }
+
+  // The form moved to a new step without a page load. Refresh what we are
+  // describing so the panel is never talking about the screen behind the user.
+  if (p.phase === 'page') {
+    clearResults();
+    $('detect').className = p.detected ? 'detect found' : 'detect none';
+    $('detect-ats').textContent = p.ats || '—';
+    $('detect-count').textContent = `${p.detected} detected`;
+    $('detect-role').textContent = p.role || '—';
+    $('fill').disabled = !p.detected;
+    $('fill-note').hidden = true;
+    return;
   }
 
   if (p.phase === 'error') {

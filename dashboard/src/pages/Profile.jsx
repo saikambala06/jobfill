@@ -4,6 +4,13 @@ import { api } from '../lib/api.js';
 import { PageHead, Field, Input, Select, Textarea, Flash, useAsync } from '../components/ui.jsx';
 
 const YES_NO = ['Yes', 'No'];
+const HEARD_FROM = ['LinkedIn', 'Indeed', 'Company website', 'Job board', 'Referral',
+  'Recruiter', 'University careers service', 'Social media', 'Other'];
+
+/* Forms ask these as Yes/No; the profile keeps them as booleans. */
+const boolLabel = (v) => (v === true ? 'Yes' : v === false ? 'No' : '');
+const setBool = (group, key, setP) => (v) =>
+  setP((prev) => ({ ...prev, [group]: { ...prev[group], [key]: v === 'Yes' } }));
 const REMOTE = ['Remote', 'Hybrid', 'On-site', 'No preference'];
 const RELOCATE = ['Yes', 'No', 'For the right role'];
 const TRAVEL = ['None', 'Up to 25%', 'Up to 50%', 'Up to 75%', 'As needed'];
@@ -25,7 +32,8 @@ const SECTIONS = [
   { id: 'preferences', n: '06', title: 'How you want to work' },
   { id: 'eligibility', n: '07', title: 'Work authorisation', blurb: 'The questions that decide whether an application goes forward.' },
   { id: 'history', n: '08', title: 'Experience and education' },
-  { id: 'demographics', n: '09', title: 'Voluntary disclosure', blurb: 'Only filled if you switch it on in the extension. Never inferred.' },
+  { id: 'application', n: '09', title: 'Questions every form asks', blurb: 'The ones that used to come back blank because there was nowhere to keep the answer.' },
+  { id: 'demographics', n: '10', title: 'Voluntary disclosure', blurb: 'Only filled if you switch it on in the extension. Never inferred.' },
 ];
 
 export default function Profile() {
@@ -149,6 +157,32 @@ export default function Profile() {
           </>)}
 
           {s.id === 'history' && <History p={p} setP={setP} />}
+
+          {s.id === 'application' && (<>
+            <Field label="How did you hear about us?" hint="Required on most Workday forms. Left blank, the step will not submit.">
+              <Select value={p.application?.referralSource} onChange={set('application', 'referralSource')}
+                placeholder="Not set" options={HEARD_FROM} />
+            </Field>
+            <Field label="Who referred you?" hint="Only used when a form asks for a referrer by name.">
+              <Input value={p.application?.referredBy} onChange={set('application', 'referredBy')} />
+            </Field>
+            <Field label="Have you worked here before?">
+              <Select value={boolLabel(p.application?.previouslyEmployedHere)} onChange={setBool('application', 'previouslyEmployedHere', setP)}
+                placeholder="Not set" options={YES_NO} />
+            </Field>
+            <Field label="Have you applied here before?">
+              <Select value={boolLabel(p.application?.previouslyApplied)} onChange={setBool('application', 'previouslyApplied', setP)}
+                placeholder="Not set" options={YES_NO} />
+            </Field>
+            <Field label="Are you related to an employee?">
+              <Select value={boolLabel(p.application?.relatedToEmployee)} onChange={setBool('application', 'relatedToEmployee', setP)}
+                placeholder="Not set" options={YES_NO} />
+            </Field>
+            <Field label="Are you bound by a non-compete?">
+              <Select value={boolLabel(p.application?.nonCompete)} onChange={setBool('application', 'nonCompete', setP)}
+                placeholder="Not set" options={YES_NO} />
+            </Field>
+          </>)}
 
           {s.id === 'demographics' && (<>
             <Field label="Gender"><Select value={p.demographics?.gender} onChange={set('demographics', 'gender')} options={GENDER} /></Field>

@@ -20,6 +20,19 @@ async function findFormTab() {
   return tabs.sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0] || null;
 }
 
+/**
+ * A browser popup is always exactly as wide as its markup asks for; a tab is as
+ * wide as the screen. That difference is the only reliable way to tell which of
+ * the two we are, and it decides whether this renders as a strip or as a card.
+ */
+function applyStandaloneLayout() {
+  const standalone = window.innerWidth > 420 || location.search.includes('welcome');
+  document.body.classList.toggle('standalone', standalone);
+  if (standalone) document.title = 'JobFill — setup';
+}
+applyStandaloneLayout();
+window.addEventListener('resize', applyStandaloneLayout);
+
 (async function boot() {
   activeTab = await findFormTab();
 

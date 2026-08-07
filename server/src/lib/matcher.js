@@ -33,6 +33,7 @@ export const CANONICAL_KEYS = [
   'gender', 'ethnicity', 'veteranStatus', 'disabilityStatus', 'hispanicLatino',
   // documents
   'resume', 'coverLetter', 'transcript', 'portfolioFile',
+  'previouslyApplied', 'relatedToEmployee', 'nonCompete',
   // repeating sections — resolved against profile.employment[i] / education[i]
   'employer.title', 'employer.company', 'employer.location', 'employer.startDate',
   'employer.endDate', 'employer.current', 'employer.description', 'employer.employmentType',
@@ -79,6 +80,15 @@ export const RULES = [
   // "Country/Region" really is the country; a bare "Region" beside a country field
   // is the state. The combined form gets its own higher-weight rule so the plain
   // one can safely deny `region` and stop stealing the state field.
+  // These three had no rule at all, so a required Workday question came back blank
+  // on every application. The other two — "How did you hear about us?" and "Have
+  // you worked here before?" — already resolve to `referralSource` and
+  // `previouslyEmployedHere`; what they lacked was somewhere in the profile to
+  // read the answer from, which is now `profile.application`.
+  { key: 'previouslyApplied', match: rx('previously applied', 'applied (here|to us|before)', 'submitted an application before'), kind: 'boolean', weight: 1.3 },
+  { key: 'relatedToEmployee', match: rx('related to (an? )?(current )?employee', 'relative(s)? (who )?work', 'family member.{0,30}(employ|work)', 'know anyone who works'), kind: 'boolean', weight: 1.3 },
+  { key: 'nonCompete', match: rx('non-?compete', 'restrictive covenant', 'bound by any (other )?agreement'), kind: 'boolean', weight: 1.3 },
+
   { key: 'country', match: rx('country\\s*/\\s*region', 'country or region'), weight: 1.3 },
   { key: 'country', match: rx('\\bcountry\\b', 'nation(ality)?', '\\bpa[ií]s\\b'), deny: rx('country\\s*code|country\\s*phone|phone|dial|region|which country are you applying') },
   { key: 'postalCode', match: rx('post(al)?\\s*code', '\\bzip\\b', '\\bpincode\\b', '\\bpin\\s*code\\b') },
@@ -294,7 +304,7 @@ export function matchField(field) {
 }
 
 /* --------------------------------------------------------- profile reads -- */
-const PROFILE_GROUPS = ['identity', 'location', 'links', 'professional', 'compensation', 'eligibility', 'demographics', 'preferences'];
+const PROFILE_GROUPS = ['identity', 'location', 'links', 'professional', 'compensation', 'eligibility', 'demographics', 'preferences', 'application'];
 
 /** Trailing "City, ST 12345" that a résumé parser folded into the street line. */
 function streetOnly(line, loc = {}) {

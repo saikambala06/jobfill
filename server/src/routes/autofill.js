@@ -354,16 +354,59 @@ router.post('/cover-letter', rateLimit({ max: 15, windowMs: 300_000 }), ah(async
   res.json({ letter: letter.trim() });
 }));
 
+/**
+ * One application, however many pages it takes.
+ *
+ * A Workday posting is six screens and the extension fills each one, so recording
+ * a row per fill counted a single job six times. Everything after the job id is
+ * the step, so the identity of an application is the URL up to that point.
+ */
+export function applicationKey(url = '') {
+  try {
+    const u = new URL(url);
+    const path = u.pathname
+      .replace(/\/(apply|application)(\/.*)?$/i, '/apply')
+      .replace(/\/(step|page)\/[^/]+$/i, '');
+    return `${u.origin}${path}`;
+  } catch {
+    return String(url).split('#')[0].split('?')[0];
+  }
+}
+
 /** Called after a fill completes so the dashboard timeline stays accurate. */
 router.post('/record', ah(async (req, res) => {
   const { page = {}, stats = {}, resumeId, durationMs } = req.body || {};
-  const application = await Application.create({
-    userId: req.user._id,
-    company: page.company, role: page.role, url: page.url, ats: page.ats,
-    fieldsDetected: stats.detected, fieldsFilled: stats.planned,
-    fieldsNeedingReview: stats.needsReview, durationMs,
-    resumeId: resumeId || undefined,
-  });
+  const key = applicationKey(page.url);
+
+  // Later steps top up the same row rather than opening a new one. The counters
+  // accumulate across the whole application, which is what the totals should mean.
+  const application = await Application.findOneAndUpdate(
+    { userId: req.user._id, applicationKey: key, status: { $in: ['filled', 'in_progress'] } },
+    {
+      $set: {
+        company: page.company || undefined,
+        role: page.role || undefined,
+        url: page.url,
+        ats: page.ats,
+        lastFilledAt: new Date(),
+      },
+      $inc: {
+        fieldsDetected: stats.detected || 0,
+        fieldsFilled: stats.planned || 0,
+        fieldsNeedingReview: stats.needsReview || 0,
+        steps: 1,
+        durationMs: durationMs || 0,
+      },
+      $setOnInsert: {
+        userId: req.user._id,
+        applicationKey: key,
+        status: 'filled',
+        resumeId: resumeId || undefined,
+      },
+    },
+    { new: true, upsert: true },
+  ).lean();
+
   await User.updateOne({ _id: req.user._id }, { $inc: { 'usage.fillsThisMonth': 1 } });
   res.status(201).json({ application });
 }));

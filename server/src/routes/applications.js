@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Application, Answer, Resume } from '../models.js';
 import { requireAuth, ah } from '../middleware.js';
+import { applicationKey } from './autofill.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -63,6 +64,39 @@ router.get('/stats', ah(async (req, res) => {
     byAts: byAts.filter((a) => a._id).map((a) => ({ ats: a._id, count: a.count })),
     daily: recent.map((d) => ({ date: d._id, count: d.count })),
   });
+}));
+
+/**
+ * The user has finished an application and pressed Done.
+ *
+ * Marking it complete is what makes the dashboard count mean "applications I
+ * actually submitted" rather than "times the extension ran".
+ */
+router.post('/complete', ah(async (req, res) => {
+  const key = applicationKey(req.body?.url || '');
+  const patch = { status: 'submitted', completedAt: new Date() };
+
+  let application = await Application.findOneAndUpdate(
+    { userId: req.user._id, applicationKey: key, status: 'filled' },
+    { $set: patch },
+    { new: true, sort: { createdAt: -1 } },
+  ).lean();
+
+  // Pressing Done without a fill first is still a real application; record it.
+  if (!application) {
+    application = await Application.create({
+      userId: req.user._id,
+      applicationKey: key,
+      url: req.body?.url,
+      company: req.body?.company,
+      role: req.body?.role,
+      ats: req.body?.ats,
+      ...patch,
+    });
+  }
+
+  const completed = await Application.countDocuments({ userId: req.user._id, status: 'submitted' });
+  res.json({ application, completed });
 }));
 
 router.patch('/:id', ah(async (req, res) => {

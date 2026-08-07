@@ -215,3 +215,53 @@ body {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ── opened as a full tab ────────────────────────────────────────────────── */
+/*
+ * The popup markup is also the setup page, reached by opening the extension from
+ * chrome://extensions before anyone has signed in. At tab width a 340px column
+ * pinned to the left edge of a 1920px screen reads as a broken page rather than a
+ * form, so in that context it becomes a centred card instead.
+ */
+body.standalone {
+  width: auto;
+  min-height: 100vh;
+  margin: 0;
+  padding: 40px 20px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  background:
+    radial-gradient(1100px 460px at 50% -10%, rgba(43, 76, 242, .07), transparent 70%),
+    var(--paper);
+}
+
+body.standalone .view {
+  width: 100%;
+  max-width: 380px;
+  overflow: hidden;
+  border: 1px solid var(--ink);
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: 0 20px 50px rgba(20, 22, 28, .13);
+}
+
+body.standalone .masthead { border-radius: 0; }
+
+/* Breathing room the popup cannot afford but a page can. */
+body.standalone .form,
+body.standalone .settings,
+body.standalone .detect,
+body.standalone .row-actions,
+body.standalone .completeness,
+body.standalone .tally,
+body.standalone #fill,
+body.standalone .note { margin-left: 22px; margin-right: 22px; }
+
+body.standalone .form { padding-top: 4px; }
+body.standalone .settings { margin-bottom: 22px; }
+body.standalone .tally { margin-bottom: 22px; }
+
+/* A line telling people what this page is for, hidden in the popup. */
+body.standalone .setup-hint { display: block; }
+.setup-hint { display: none; }

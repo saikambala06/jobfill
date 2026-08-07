@@ -69,6 +69,16 @@ const ProfileSchema = new Schema({
     willingToRelocate: String, remotePreference: String, willingToTravel: String,
     workSchedule: String, preferredLocations: [String],
   },
+  // Questions nearly every application asks that had nowhere to live, so they
+  // reached the form as a blank required field every single time.
+  application: {
+    referralSource: { type: String, default: '' },
+    referredBy: { type: String, default: '' },
+    previouslyEmployedHere: { type: Boolean, default: false },
+    previouslyApplied: { type: Boolean, default: false },
+    relatedToEmployee: { type: Boolean, default: false },
+    nonCompete: { type: Boolean, default: false },
+  },
   eligibility: {
     workAuthorized: String, requiresSponsorship: String, visaStatus: String,
     hasDriversLicense: String, criminalRecord: String, over18: String,
@@ -142,19 +152,26 @@ const ApplicationSchema = new Schema({
   role: String,
   url: String,
   ats: String,
+  // The URL with the step stripped off — the thing that stays the same across all
+  // six pages of a Workday application, so they record as one job and not six.
+  applicationKey: { type: String, index: true },
   status: {
     type: String,
     enum: ['filled', 'submitted', 'interviewing', 'offer', 'rejected', 'withdrawn'],
     default: 'filled',
   },
-  fieldsDetected: Number,
-  fieldsFilled: Number,
-  fieldsNeedingReview: Number,
-  durationMs: Number,
+  fieldsDetected: { type: Number, default: 0 },
+  fieldsFilled: { type: Number, default: 0 },
+  fieldsNeedingReview: { type: Number, default: 0 },
+  steps: { type: Number, default: 0 },
+  durationMs: { type: Number, default: 0 },
+  lastFilledAt: Date,
+  completedAt: Date,
   resumeId: { type: Schema.Types.ObjectId, ref: 'Resume' },
   notes: String,
 }, { timestamps: true });
 ApplicationSchema.index({ userId: 1, createdAt: -1 });
+ApplicationSchema.index({ userId: 1, applicationKey: 1, status: 1 });
 
 /* Guard against model recompilation across warm serverless invocations. */
 export const User = models.User || model('User', UserSchema);

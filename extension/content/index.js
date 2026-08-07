@@ -58,6 +58,47 @@
   /** A cheap fingerprint of "which questions are on screen right now". */
   const stepSignature = (fields) => fields.map((f) => f.selector).sort().join('|');
 
+  /**
+   * Watch for the application moving to its next step.
+   *
+   * Workday, SuccessFactors and Greenhouse's newer flow are single-page apps: the
+   * step changes without a page load, so `tabs.onUpdated` never fires and the side
+   * panel kept describing the screen the user had already left. Patching the
+   * history API catches the ones that push a URL; polling the field signature
+   * catches the ones that do not change the URL at all.
+   */
+  function watchForStepChanges() {
+    const announce = () => {
+      const now = JF.detectFields({ force: true });
+      const sig = stepSignature(now.fields);
+      if (sig === lastStepSignature) return;
+      lastStepSignature = sig;
+      lastDetection = now;
+      tellPanel({
+        phase: 'page',
+        detected: now.fields.length,
+        ats: now.adapter.name,
+        role: now.page.role || now.page.company || '',
+        url: location.href,
+      });
+    };
+    const debounced = () => { clearTimeout(watchForStepChanges.t); watchForStepChanges.t = setTimeout(announce, 500); };
+
+    for (const method of ['pushState', 'replaceState']) {
+      const original = window.history[method];
+      window.history[method] = function patched(...args) {
+        const out = original.apply(this, args);
+        debounced();
+        return out;
+      };
+    }
+    window.addEventListener('popstate', debounced);
+
+    // The fallback for steps that swap the form in place without touching the URL.
+    window.setInterval(() => { if (!running && !userIsBusy()) debounced(); }, 2500);
+  }
+  watchForStepChanges();
+
   /* --------------------------------------------------------------- run --- */
   async function run(opts = {}) {
     if (running) return;
@@ -291,8 +332,19 @@
     if (msg.type === 'RUN_AUTOFILL') { run(msg.payload || {}); respond({ ok: true }); }
     if (msg.type === 'SET_SURFACE') { surface = msg.payload?.surface || 'overlay'; respond({ ok: true }); }
     if (msg.type === 'SCAN_ONLY') {
-      const d = JF.detectFields();
-      respond({ ok: true, data: { count: d.fields.length, ats: d.adapter.name, page: d.page } });
+      const d = JF.detectFields({ force: Boolean(msg.payload?.force) });
+      respond({
+        ok: true,
+        data: {
+          count: d.fields.length,
+          // How many questions are still open. "Is there a next step?" is really
+          // "is there anything left to answer?", and a page of already-filled
+          // boxes is not a new step.
+          unfilled: d.fields.filter((f) => !f.prefilled).length,
+          ats: d.adapter.name,
+          page: d.page,
+        },
+      });
     }
     if (msg.type === 'SAVE_ANSWERS_NOW') { saveAnswers(); respond({ ok: true }); }
     if (msg.type === 'TOGGLE_PANEL') { JF.overlay.toggle(msg.payload || {}); respond({ ok: true, open: JF.overlay.isOpen() }); }

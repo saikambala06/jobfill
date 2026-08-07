@@ -5,7 +5,7 @@ import { requireAuth, ah } from '../middleware.js';
 const router = Router();
 router.use(requireAuth);
 
-const GROUPS = ['identity', 'location', 'links', 'professional', 'compensation', 'preferences', 'eligibility', 'demographics'];
+const GROUPS = ['identity', 'location', 'links', 'professional', 'compensation', 'preferences', 'eligibility', 'demographics', 'application'];
 const LISTS = ['employment', 'education', 'certifications', 'skills', 'languages', 'projects', 'references'];
 
 /**

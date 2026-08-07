@@ -38,6 +38,7 @@ export const api = {
   login: (b) => request('/auth/login', { method: 'POST', body: b }),
   me: () => request('/auth/me'),
   updateSettings: (b) => request('/auth/settings', { method: 'PATCH', body: b }),
+  changePassword: (b) => request('/auth/password', { method: 'POST', body: b }),
 
   profile: () => request('/profile'),
   saveProfile: (b) => request('/profile', { method: 'PUT', body: b }),
@@ -56,6 +57,7 @@ export const api = {
   applications: () => request('/applications'),
   stats: () => request('/applications/stats'),
   patchApplication: (id, b) => request(`/applications/${id}`, { method: 'PATCH', body: b }),
+  completeApplication: (b) => request('/applications/complete', { method: 'POST', body: b }),
 
   coverLetter: (b) => request('/autofill/cover-letter', { method: 'POST', body: b }),
 };
